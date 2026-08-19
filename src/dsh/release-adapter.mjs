@@ -1,4 +1,5 @@
 import { DshxProductAdapter } from './product-adapter.mjs';
+import { codexPlanTarget, threadSettingsUpdatedNotification } from './plan-presentation.mjs';
 import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
 import { codexInputToDshContent, dshContentText } from './user-input.mjs';
 import { DshUserShellBridge } from './user-shell.mjs';
@@ -24,6 +25,47 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     return this._workspaceCommands ??= new DshWorkspaceCommandBridge({ driver: this.driver });
   }
 
+  planListeners() {
+    return this._planListeners ??= new Map();
+  }
+
+  planMutationSuppressed() {
+    return this._planMutationSuppressed ??= new Set();
+  }
+
+  planMode(agent) {
+    const service = agent?.ctx?.get?.('planMode') ?? this.ctx.get('planMode');
+    if (!service?.set || !service?.get) throw new Error('DSHX requires DSH service: planMode');
+    return service;
+  }
+
+  planSettingsNotification(agent) {
+    const response = this.threadResponse(agent);
+    return threadSettingsUpdatedNotification({
+      threadId: String(agent.id),
+      response,
+      planState: this.planMode(agent).get(agent)
+    });
+  }
+
+  installController(handle) {
+    const controller = super.installController(handle);
+    const threadId = String(controller.agent.id);
+    if (!this.planListeners().has(threadId)) {
+      const dispose = controller.agent.ctx.on('session/event', (session, event) => {
+        if (session !== controller.agent.session || event?.type !== 'plan/mode') return;
+        if (this.planMutationSuppressed().has(threadId)) return;
+        try {
+          this.send(this.planSettingsNotification(controller.agent));
+        } catch (error) {
+          this.diagnostics(`plan settings projection failed for ${threadId}: ${error instanceof Error ? error.message : error}`);
+        }
+      });
+      this.planListeners().set(threadId, dispose);
+    }
+    return controller;
+  }
+
   async dispatch(method, params) {
     switch (method) {
       case 'command/exec':
@@ -32,6 +74,8 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
         return this.threadForkPresentation(params);
       case 'thread/name/set':
         return this.threadNameSet(params);
+      case 'thread/settings/update':
+        return this.threadSettingsUpdatePresentation(params);
       case 'thread/shellCommand':
         return this.threadShellCommand(params);
       case 'turn/start':
@@ -40,9 +84,14 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
       case 'turn/interrupt':
         if (this.userShell().interrupt(params?.threadId, params?.turnId)) return { result: {} };
         return super.dispatch(method, params);
-      case 'thread/unsubscribe':
-        this.userShell().abortThread(params?.threadId, 'thread unsubscribed');
+      case 'thread/unsubscribe': {
+        const threadId = String(params?.threadId ?? '');
+        this.userShell().abortThread(threadId, 'thread unsubscribed');
+        this.planListeners().get(threadId)?.();
+        this.planListeners().delete(threadId);
+        this.planMutationSuppressed().delete(threadId);
         return super.dispatch(method, params);
+      }
       default:
         return super.dispatch(method, params);
     }
@@ -81,18 +130,62 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     };
   }
 
+  async threadResume(params = {}) {
+    const response = await super.threadResume(params);
+    const threadId = String(params.threadId ?? response.result.thread?.id ?? '');
+    const agent = this.controllers.get(threadId)?.agent;
+    const prior = response.afterResponse;
+    return {
+      ...response,
+      afterResponse: () => {
+        prior?.();
+        if (agent) this.send(this.planSettingsNotification(agent));
+      }
+    };
+  }
+
   async threadForkPresentation(params = {}) {
     const response = await super.threadFork(params);
     const startedThread = { ...response.result.thread, turns: [] };
+    const agent = this.controllers.get(String(response.result.thread.id))?.agent;
     return {
       ...response,
       // Pinned Codex emits copied history only in the fork response. The
       // thread/started notification introduces metadata/live state and must not
       // replay those copied turns a second time before paginated hydration.
-      afterResponse: () => this.send({
-        method: 'thread/started',
-        params: { thread: startedThread }
-      })
+      afterResponse: () => {
+        this.send({
+          method: 'thread/started',
+          params: { thread: startedThread }
+        });
+        if (agent) this.send(this.planSettingsNotification(agent));
+      }
+    };
+  }
+
+  async threadSettingsUpdatePresentation(params = {}) {
+    if (params.collaborationMode == null) return super.threadSettingsUpdate(params);
+    const threadId = String(params.threadId ?? '');
+    const controller = this.controllers.get(threadId);
+    if (!controller) throw new Error(`Thread is not resumed in DSHX: ${threadId}`);
+    const active = codexPlanTarget(params.collaborationMode);
+    const { collaborationMode: _ignored, ...ordinary } = params;
+
+    // Let the existing DSH-backed settings adapter validate/apply every other
+    // supported field. The collaboration payload's model/reasoning/instructions
+    // are intentionally not treated as DSH model or prompt configuration.
+    await super.threadSettingsUpdate(ordinary);
+
+    this.planMutationSuppressed().add(threadId);
+    try {
+      await this.planMode(controller.agent).set(controller.agent, active);
+    } finally {
+      this.planMutationSuppressed().delete(threadId);
+    }
+
+    return {
+      result: {},
+      afterResponse: () => this.send(this.planSettingsNotification(controller.agent))
     };
   }
 
@@ -161,6 +254,9 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
 
   async close() {
     this._userShell?.close();
+    for (const dispose of this.planListeners().values()) dispose?.();
+    this.planListeners().clear();
+    this.planMutationSuppressed().clear();
     await super.close();
   }
 }
