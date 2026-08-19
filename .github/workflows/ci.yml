@@ -107,6 +107,15 @@ jobs:
           grep -q 'dshx resume' "$APP"
           grep -q 'if crate::dshx_backend()' "$SLASH"
           grep -q 'DeepSeek Harness' "$SLASH"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('.upstream/codex/codex-rs/tui/src/slash_command.rs').read_text()
+          start = text.index('if crate::dshx_backend()')
+          end = text.index('return false;', start)
+          hidden = text[start:end]
+          if 'SlashCommand::Diff' in hidden:
+              raise SystemExit('/diff must remain visible in DSHX now that command/exec is DSH-backed')
+          PY
       - name: Assert thin-fork invariants (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -135,6 +144,11 @@ jobs:
           $slash = Get-Content .upstream\codex\codex-rs\tui\src\slash_command.rs -Raw
           if (-not $slash.Contains('if crate::dshx_backend()')) { throw 'DSHX slash capability patch is missing' }
           if (-not $slash.Contains('DeepSeek Harness')) { throw 'DSHX slash branding is missing' }
+          $hiddenStart = $slash.IndexOf('if crate::dshx_backend()')
+          $hiddenEnd = $slash.IndexOf('return false;', $hiddenStart)
+          if ($hiddenStart -lt 0 -or $hiddenEnd -lt 0) { throw 'DSHX slash hidden block not found' }
+          $hidden = $slash.Substring($hiddenStart, $hiddenEnd - $hiddenStart)
+          if ($hidden.Contains('SlashCommand::Diff')) { throw '/diff must remain visible in DSHX now that command/exec is DSH-backed' }
       - name: Real pinned TUI PTY smoke
         if: runner.os == 'Linux'
         shell: bash
@@ -194,9 +208,12 @@ jobs:
           grep -q "dsh-base" src/dsh/runtime-boot.mjs
           grep -q "dsh-headless" src/dsh/runtime-boot.mjs
           grep -q "startup: { disabled: true }" src/dsh/runtime-boot.mjs
-      - name: Assert DSHX never executes user shell through Node host processes
+      - name: Assert shell and workspace execution remain DSH-owned
         shell: bash
         run: |
-          ! grep -R "execFile\|execSync\|spawn(" src/dsh/user-shell.mjs
+          ! grep -E "execFile|execSync|spawn\(" src/dsh/user-shell.mjs src/dsh/workspace-command.mjs
           grep -q "tools.execute" src/dsh/user-shell.mjs
           grep -q "agent: controller.agent" src/dsh/user-shell.mjs
+          grep -q "tools.execute" src/dsh/workspace-command.mjs
+          grep -q "agent" src/dsh/workspace-command.mjs
+          grep -q "case 'command/exec'" src/dsh/release-adapter.mjs
