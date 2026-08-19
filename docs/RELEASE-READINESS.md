@@ -12,7 +12,8 @@ No item becomes green because code for the check exists. A release candidate is 
 |---|---|---|
 | Zero-argument launch | `bin/dshx.mjs`, clean-install smoke | pass on supported release artifacts |
 | Official DSH composition | `scripts/runtime-smoke.mjs` on Linux/Windows/macOS | pass |
-| Exact DSH dependency closure | `scripts/verify-dsh-closure.mjs`, release shrinkwrap | pass |
+| Frozen source dependency graph | checked-in `package-lock.json`; trusted main-branch RC freeze workflow resolves it with install scripts disabled | lock present and no manifest drift |
+| Exact DSH dependency closure | `scripts/verify-dsh-closure.mjs`, source lock and release shrinkwrap | pass |
 | DSH ownership boundary | adapter/unit tests + CI ownership assertions | pass |
 | Approval/permission fail-closed | approval/permission/subagent authority tests | pass |
 | Session resume/durability projection | DSH `agents.resume`, persistence projection and resume tests; persisted model/header wins over machine default | pass |
@@ -49,7 +50,7 @@ Any difference is either fixed, documented as a deliberate product difference in
 
 ## Promotion procedure
 
-1. Freeze the candidate commit on `release/1.0-rc` and ensure the supported Codex/DSH pins are unchanged during validation.
+1. Freeze the dependency graph in `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`; Codex/DSH pins must not change during validation.
 2. Run the full CI workflow and the dedicated Windows ConPTY workflow for that exact commit.
 3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass.
 4. Install the generated Windows release artifact for the manual Windows Terminal/CJK/IME side-by-side acceptance run; do not validate a source checkout instead.
