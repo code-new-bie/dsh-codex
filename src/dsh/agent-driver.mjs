@@ -23,36 +23,61 @@ export class DshAgentDriver {
     if (!ctx || typeof ctx.get !== 'function') throw new Error('DshAgentDriver requires a Cordis Context');
     this.ctx = ctx;
     this.selections = new WeakMap();
+    this.externalSelections = new WeakMap();
   }
 
   async settleComposition() {
     await this.ctx.get('loader')?.await?.();
   }
 
+  restoredSelection(agent) {
+    const logged = agent.session.requestHeader?.()?.config;
+    if (logged !== undefined) {
+      return {
+        provider: logged.provider,
+        model: logged.model,
+        ...(logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort })
+      };
+    }
+    return requireService(this.ctx, 'agentDefaultModel').currentSelection();
+  }
+
   selectionFor(agent) {
     const existing = this.selections.get(agent);
     if (existing) return existing;
-    const defaultModel = requireService(this.ctx, 'agentDefaultModel');
+    if (this.externalSelections.has(agent)) {
+      throw new Error('DSHX must not install a second model-selection listener on a Host-owned Agent');
+    }
     let picked;
     const selection = {
       get current() {
         if (picked !== undefined) return picked;
-        const logged = agent.session.requestHeader?.()?.config;
-        if (logged !== undefined) {
-          return {
-            provider: logged.provider,
-            model: logged.model,
-            ...(logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort })
-          };
-        }
-        return defaultModel.currentSelection();
+        return undefined;
       },
       set current(next) { picked = next; },
       assembled: undefined
     };
+    selection.current = this.restoredSelection(agent);
     installModelSelection(agent.ctx, selection);
     this.selections.set(agent, selection);
     return selection;
+  }
+
+  /**
+   * Attach presentation state to an Agent created by another official DSH
+   * entrypoint (currently Host sessions.fork). No routing listener is installed;
+   * writes must go back through the owning DSH API delegate.
+   */
+  adoptExternalSelection(agent, { current, select } = {}) {
+    if (this.selections.has(agent)) {
+      throw new Error('Cannot adopt Host-owned selection after DSHX installed its own selection listener');
+    }
+    const state = {
+      current: current ?? this.restoredSelection(agent),
+      select
+    };
+    this.externalSelections.set(agent, state);
+    return state.current;
   }
 
   installSelection(agentCtx) {
@@ -83,7 +108,7 @@ export class DshAgentDriver {
   }
 
   currentModel(agent) {
-    return this.selectionFor(agent).current;
+    return this.externalSelections.get(agent)?.current ?? this.selectionFor(agent).current;
   }
 
   currentTitle(agent) {
@@ -114,6 +139,15 @@ export class DshAgentDriver {
       model: resolved.model,
       ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort })
     };
+    const external = this.externalSelections.get(agent);
+    if (external) {
+      if (typeof external.select !== 'function') {
+        throw new Error('Host-owned DSH Agent has no model-selection delegate');
+      }
+      const committed = await external.select(selected);
+      external.current = committed ?? selected;
+      return external.current;
+    }
     this.selectionFor(agent).current = selected;
     return selected;
   }
