@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { DshAppServerAdapter } from './app-server-adapter.mjs';
+import { dshThreadItemsPage, dshThreadTurnsPage } from './history-pages.mjs';
 import { dshSkillsListEntry } from './skills.mjs';
 
 function textInput(params) {
@@ -52,6 +53,10 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     switch (method) {
       case 'skills/list':
         return this.skillsList(params);
+      case 'thread/turns/list':
+        return this.threadTurnsList(params);
+      case 'thread/items/list':
+        return this.threadItemsList(params);
       case 'thread/settings/update':
         return this.threadSettingsUpdate(params);
       case 'turn/steer':
@@ -67,7 +72,12 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     const id = codexPermissionProfileId(permission.preset);
     return {
       ...response,
-      activePermissionProfile: id == null ? null : { id }
+      runtimeWorkspaceRoots: [],
+      activePermissionProfile: id == null ? null : { id },
+      multiAgentMode: 'explicitRequestOnly',
+      initialTurnsPage: null,
+      turnsBackwardsCursor: null,
+      itemsBackwardsCursor: null
     };
   }
 
@@ -102,6 +112,36 @@ export class DshxProductAdapter extends DshAppServerAdapter {
       diagnostics: this.diagnostics
     })));
     return { result: { data } };
+  }
+
+  historyController(threadId) {
+    const controller = this.controllers.get(String(threadId ?? ''));
+    if (!controller) {
+      throw new Error(`Thread must be resumed before paginated DSH history is rendered: ${String(threadId ?? '')}`);
+    }
+    return controller;
+  }
+
+  threadTurnsList(params = {}) {
+    const controller = this.historyController(params.threadId);
+    return {
+      result: dshThreadTurnsPage({
+        controller,
+        params,
+        diagnostics: this.diagnostics
+      })
+    };
+  }
+
+  threadItemsList(params = {}) {
+    const controller = this.historyController(params.threadId);
+    return {
+      result: dshThreadItemsPage({
+        controller,
+        params,
+        diagnostics: this.diagnostics
+      })
+    };
   }
 
   async threadSettingsUpdate(params = {}) {
