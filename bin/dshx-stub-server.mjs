@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { startProtocolStubServer } from '../src/server.mjs';
 
+const token = process.env.DSHX_STUB_TOKEN || undefined;
 const server = await startProtocolStubServer({
+  token,
   log: (message) => process.stderr.write(`[dshx-stub] ${message}\n`)
 });
 
