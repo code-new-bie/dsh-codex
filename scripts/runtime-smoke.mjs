@@ -4,14 +4,23 @@ import { bootDshxRuntime } from '../src/dsh/runtime-boot.mjs';
 
 const REQUIRED_SERVICES = [
   'agents',
+  'agentDefaultModel',
   'llm',
   'sessions',
   'sessionPersistence',
+  'sessionQuery',
+  'sessionProjections',
+  'sessionTitle',
+  'workspaceRegistry',
+  'attachments',
   'tools',
+  'commands',
+  'compaction',
   'permissionPresets',
   'approval',
   'userQuestions',
-  'skills'
+  'skills',
+  'planMode'
 ];
 
 let ctx;
@@ -27,7 +36,12 @@ try {
   if (missing.length > 0) {
     throw new Error(`official DSH composition is missing required presentation services: ${missing.join(', ')}`);
   }
-  process.stdout.write(`official DSH runtime booted: ${REQUIRED_SERVICES.join(', ')}\n`);
+  const commands = ctx.get('commands');
+  const commandNames = new Set((commands?.list?.() ?? []).map((entry) => entry.name));
+  if (!commandNames.has('compact')) {
+    throw new Error('official DSH composition does not register the /compact command required by DSHX');
+  }
+  process.stdout.write(`official DSH runtime booted: ${REQUIRED_SERVICES.join(', ')}; /compact registered\n`);
 } finally {
   clearTimeout(timer);
   await ctx?.dispose?.();
