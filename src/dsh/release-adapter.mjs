@@ -2,6 +2,7 @@ import { DshxProductAdapter } from './product-adapter.mjs';
 import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
 import { codexInputToDshContent, dshContentText } from './user-input.mjs';
 import { DshUserShellBridge } from './user-shell.mjs';
+import { DshWorkspaceCommandBridge } from './workspace-command.mjs';
 
 function snapshotTitle(snapshot) {
   return typeof snapshot?.title === 'string' && snapshot.title.length > 0 ? snapshot.title : null;
@@ -19,8 +20,14 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     });
   }
 
+  workspaceCommands() {
+    return this._workspaceCommands ??= new DshWorkspaceCommandBridge({ driver: this.driver });
+  }
+
   async dispatch(method, params) {
     switch (method) {
+      case 'command/exec':
+        return this.commandExec(params);
       case 'thread/fork':
         return this.threadForkPresentation(params);
       case 'thread/name/set':
@@ -39,6 +46,10 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
       default:
         return super.dispatch(method, params);
     }
+  }
+
+  async commandExec(params = {}) {
+    return { result: await this.workspaceCommands().execute(params) };
   }
 
   async richUserTurn(method, params = {}) {
