@@ -1,5 +1,6 @@
 import { DshxProductAdapter } from './product-adapter.mjs';
 import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
+import { codexInputToDshContent, dshContentText } from './user-input.mjs';
 import { DshUserShellBridge } from './user-shell.mjs';
 
 function snapshotTitle(snapshot) {
@@ -24,6 +25,9 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
         return this.threadNameSet(params);
       case 'thread/shellCommand':
         return this.threadShellCommand(params);
+      case 'turn/start':
+      case 'turn/steer':
+        return this.richUserTurn(method, params);
       case 'turn/interrupt':
         if (this.userShell().interrupt(params?.threadId, params?.turnId)) return { result: {} };
         return super.dispatch(method, params);
@@ -32,6 +36,25 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
         return super.dispatch(method, params);
       default:
         return super.dispatch(method, params);
+    }
+  }
+
+  async richUserTurn(method, params = {}) {
+    const threadId = String(params.threadId ?? '');
+    const controller = this.controllers.get(threadId);
+    if (!controller) return super.dispatch(method, params);
+    const content = await codexInputToDshContent(this.ctx, params.input ?? []);
+    const clear = controller.prepareUserContent(content);
+    try {
+      // Preserve the original base/product validation path. The fallback text is
+      // consumed only if no prepared rich content exists; it also keeps the
+      // base adapter's expected text-only parameter shape intact.
+      return await super.dispatch(method, {
+        ...params,
+        input: [{ type: 'text', text: dshContentText(content) }]
+      });
+    } finally {
+      clear();
     }
   }
 
