@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
+import { localServerInternals, startDshxLocalServer } from '../src/dsh/local-server.mjs';
 
 class FakeChild extends EventEmitter {
   constructor() {
@@ -72,6 +75,38 @@ class FakeAdapter {
     FakeAdapter.closes += 1;
   }
 }
+
+test('Windows default local IPC root is anchored below DSHX user presentation home, not TEMP', () => {
+  const root = localServerInternals.defaultSocketRoot({
+    platform: 'win32',
+    home: 'C:\\Users\\Alice\\.dshx\\codex-tui',
+    temporaryDirectory: 'C:\\shared-temp',
+    userHome: 'C:\\Users\\Alice'
+  });
+  assert.equal(root, resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'ipc'));
+  assert.doesNotMatch(root.toLowerCase(), /shared-temp/);
+});
+
+test('Windows fallback IPC root remains below the current user home when no presentation home is supplied', () => {
+  const root = localServerInternals.defaultSocketRoot({
+    platform: 'win32',
+    temporaryDirectory: 'C:\\shared-temp',
+    userHome: 'C:\\Users\\Alice'
+  });
+  assert.equal(root, resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'ipc'));
+});
+
+test('Unix default local IPC root stays in tmp; createSocketDirectory enforces an ephemeral subdirectory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-root-test-'));
+  try {
+    assert.equal(localServerInternals.defaultSocketRoot({ platform: 'linux', temporaryDirectory: root }), root);
+    const child = localServerInternals.createSocketDirectory(root);
+    assert.match(child, /^.*dshx-/);
+    assert.notEqual(child, root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('local production transport exposes only a unix endpoint and relays RPC over bridge stdio', async () => {
   let disposed = 0;
