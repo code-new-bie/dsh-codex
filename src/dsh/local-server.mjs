@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
-import { DshxProductAdapter } from './product-adapter.mjs';
+import { DshxReleaseAdapter } from './release-adapter.mjs';
 import { bootDshxRuntime } from './runtime-boot.mjs';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -44,7 +44,7 @@ export async function startDshxLocalServer({
   token = crypto.randomBytes(32).toString('base64url'),
   runtime,
   bootRuntime = bootDshxRuntime,
-  Adapter = DshxProductAdapter,
+  Adapter = DshxReleaseAdapter,
   log = () => {}
 } = {}) {
   if (host !== '127.0.0.1') {
