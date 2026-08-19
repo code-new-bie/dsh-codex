@@ -7,10 +7,12 @@ function fixture() {
   const calls = [];
   let sessionListener;
   let disposed = false;
-  const session = { id: 'session-1' };
+  const session = { id: 'session-1', events: [], header: { cwd: '/workspace' } };
   const agent = {
     id: 'session-1',
+    session,
     ctx: {
+      get() { return undefined; },
       on(name, listener) {
         assert.equal(name, 'session/event');
         sessionListener = listener;
@@ -26,12 +28,14 @@ function fixture() {
     followup(_agent, text) {
       calls.push(['followup', text]);
       queueMicrotask(() => {
-        sessionListener?.(session, {
+        const event = {
           type: 'turn/start',
           seq: 1,
           time: 1_700_000_000_000,
           data: { turn: 4 }
-        });
+        };
+        session.events.push(event);
+        sessionListener?.(session, event);
       });
     },
     steer(_agent, text) { calls.push(['steer', text]); },
@@ -41,9 +45,13 @@ function fixture() {
   const controller = new DshThreadController({ handle, driver, emit: (event) => emitted.push(event) });
   return {
     controller,
+    session,
     emitted,
     calls,
-    emitSession(event) { sessionListener?.(session, event); },
+    emitSession(event, target = session) {
+      if (target === session) session.events.push(event);
+      sessionListener?.(target, event);
+    },
     get disposed() { return disposed; },
     get hasListener() { return Boolean(sessionListener); }
   };
@@ -64,6 +72,39 @@ test('startTurn waits for DSH turn/start and releases notification after RPC res
 
   started.release();
   assert.equal(fx.emitted.length, 1, 'release must be idempotent');
+});
+
+test('all notifications produced before the turn/start RPC response remain ordered behind turn/started', async () => {
+  const fx = fixture();
+  const started = await fx.controller.startTurn('hello');
+  fx.emitSession({
+    type: 'assistant/chunk',
+    seq: 2,
+    time: 1_700_000_000_010,
+    data: { turn: 4, step: 1, chunk: { type: 'text-delta', index: 0, text: 'fast' } }
+  });
+  assert.deepEqual(fx.emitted, []);
+
+  started.release();
+  assert.deepEqual(fx.emitted.map((event) => event.method), [
+    'turn/started',
+    'item/started',
+    'item/agentMessage/delta'
+  ]);
+});
+
+test('controller ignores global session/event traffic from other DSH sessions', async () => {
+  const fx = fixture();
+  const started = await fx.controller.startTurn('hello');
+  started.release();
+  const otherSession = { id: 'session-2', events: [] };
+  fx.emitSession({
+    type: 'assistant/chunk',
+    seq: 1,
+    time: 1_700_000_000_010,
+    data: { turn: 99, step: 1, chunk: { type: 'text-delta', index: 0, text: 'wrong thread' } }
+  }, otherSession);
+  assert.deepEqual(fx.emitted.map((event) => event.method), ['turn/started']);
 });
 
 test('later DSH session events stream directly through the projector', async () => {
