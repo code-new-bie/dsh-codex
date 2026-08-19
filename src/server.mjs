@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { ProtocolStub, normalizeDispatchResult } from './protocol.mjs';
 
@@ -10,6 +11,13 @@ function sleep(ms) {
 
 function sendJson(socket, message) {
   if (socket.readyState === 1) socket.send(JSON.stringify(message));
+}
+
+function tokenMatches(header, token) {
+  if (!token) return true;
+  const left = Buffer.from(typeof header === 'string' ? header : '', 'utf8');
+  const right = Buffer.from(`Bearer ${token}`, 'utf8');
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 async function sendEvents(socket, events, delayMs, stub) {
@@ -41,10 +49,17 @@ export async function startProtocolStubServer({
   port = 0,
   cwd = process.cwd(),
   eventDelayMs = DEFAULT_EVENT_DELAY_MS,
+  token,
   log = () => {}
 } = {}) {
   const stub = new ProtocolStub({ cwd });
-  const server = new WebSocketServer({ host, port });
+  const server = new WebSocketServer({
+    host,
+    port,
+    verifyClient: token
+      ? (info, done) => done(tokenMatches(info.req.headers.authorization, token), 401, 'Unauthorized')
+      : undefined
+  });
 
   server.on('connection', (socket, request) => {
     log(`client connected from ${request.socket.remoteAddress ?? 'unknown'}`);
@@ -94,6 +109,7 @@ export async function startProtocolStubServer({
     host,
     port: address.port,
     url: `ws://${host}:${address.port}`,
+    token,
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
