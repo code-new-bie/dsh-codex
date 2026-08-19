@@ -34,9 +34,8 @@ If a DSH capability is unavailable or cannot be represented safely, DSHX must di
 │ welcome / composer / cells / diff   │
 │ slash commands / pickers / footer   │
 └──────────────────┬──────────────────┘
-                   │
-          app-server-compatible view
-                   │
+                   │ private child process
+                   │ JSON-RPC / JSONL over stdin/stdout
 ┌──────────────────▼──────────────────┐
 │ dsh-codex thin adapter              │  project-owned translation
 │                                     │
@@ -53,6 +52,8 @@ If a DSH capability is unavailable or cannot be represented safely, DSHX must di
 │ sandbox / approvals / skills / ...  │
 └─────────────────────────────────────┘
 ```
+
+The child-process boundary is a transport boundary only. The Node adapter does not become an Agent runtime: it boots the official DSH profile/composition and translates its public state/events for the TUI.
 
 ## Protocol mapping
 
@@ -85,7 +86,7 @@ Where no official mapping exists, the adapter reports unsupported instead of syn
 
 ## Codex upstream strategy
 
-The TUI is pinned to a known `openai/codex` commit. Upstream changes are integrated as explicit sync commits. Project-specific changes should live behind narrow extension points so rendering/input code remains close to upstream.
+The TUI is pinned to a known `openai/codex` commit. Upstream changes are integrated as explicit sync commits. Project-specific changes live as a small ordered patch stack so rendering/input code remains close to upstream.
 
 Desired long-term diff:
 
@@ -98,13 +99,20 @@ DSH-specific UI        isolated extension points only
 
 ## Runtime transport
 
-M0 may use Codex remote/app-server WebSocket mode strictly as a development protocol harness. It is not an accepted production dependency.
+Early protocol proofs used Codex remote/app-server WebSocket mode. That path is development-only and is not an accepted production dependency.
 
-Production `dshx` must hide transport/runtime orchestration from the user and use a local supported integration path (for example in-process, stdio or a production-grade local socket) consistent with the pinned TUI architecture.
+Production `dshx` uses a private child-process transport:
+
+1. `dshx` launches the packaged pinned Codex TUI.
+2. The TUI starts `bin/dshx-app-server.mjs` with the packaged Node runtime path supplied by the launcher.
+3. TUI and adapter exchange app-server-compatible JSON-RPC as newline-delimited JSON over the child stdin/stdout pipes.
+4. The adapter boots and disposes the official DeepSeek Harness composition in that child process.
+
+Production therefore opens no TCP listener and exports no app-server endpoint/token. The release packager rejects a runtime `ws` dependency or legacy WebSocket server module. WebSocket fixtures may remain only in the source/development test closure.
 
 ## Launcher contract
 
-Production 1.0 must support:
+Production 1.0 supports:
 
 ```bash
 cd <project>
@@ -113,6 +121,10 @@ dshx
 
 The user must not need to invoke `codex --remote`, a bridge script, package-manager commands or DSH profile plumbing for normal startup.
 
+`CODEX_HOME` is redirected to DSHX presentation-only state, so DSHX does not read or modify the user's ordinary Codex state.
+
 ## Security model
 
 The TUI renders approval decisions; DSH enforces them. Translation must never silently upgrade privileges. If the current Codex UI/protocol cannot faithfully represent a DSH permission request, DSHX fails closed and surfaces an explicit incompatibility.
+
+The private stdio adapter further reduces the local attack surface: production requires no listening socket and no bearer credential crossing process boundaries. Security authority still remains in DSH, not in the transport layer.
