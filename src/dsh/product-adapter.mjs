@@ -58,6 +58,8 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         return this.accountUsageRead(params);
       case 'skills/list':
         return this.skillsList(params);
+      case 'thread/compact/start':
+        return this.threadCompactStart(params);
       case 'thread/fork':
         return this.threadFork(params);
       case 'thread/turns/list':
@@ -68,6 +70,8 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         return this.threadSettingsUpdate(params);
       case 'thread/unsubscribe':
         return this.threadUnsubscribeWithStatus(params);
+      case 'turn/interrupt':
+        return this.turnInterruptProduct(params);
       case 'turn/steer':
         return this.turnSteer(params);
       default:
@@ -93,6 +97,14 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         threadUsage: null
       }
     };
+  }
+
+  manualCompactions() {
+    return this._manualCompactions ??= new Map();
+  }
+
+  warnThread(threadId, message) {
+    this.send({ method: 'warning', params: { threadId, message } });
   }
 
   threadResponse(agent, options = {}) {
@@ -143,6 +155,59 @@ export class DshxProductAdapter extends DshAppServerAdapter {
       diagnostics: this.diagnostics
     })));
     return { result: { data } };
+  }
+
+  threadCompactStart(params = {}) {
+    const threadId = String(params.threadId ?? '');
+    const controller = this.controllers.get(threadId);
+    if (!controller) throw new Error(`Thread is not resumed in DSHX: ${threadId}`);
+    const compaction = this.ctx.get('compaction');
+    if (!compaction?.compactNow) throw new Error('DSHX requires DSH service: compaction.compactNow');
+    const active = this.manualCompactions();
+    if (active.has(threadId)) {
+      throw new Error('Compaction is unavailable because this thread already has an active manual compaction');
+    }
+    const abortController = new AbortController();
+    active.set(threadId, abortController);
+    return {
+      result: {},
+      afterResponse: () => {
+        void this.runManualCompaction({ threadId, controller, compaction, abortController });
+      }
+    };
+  }
+
+  async runManualCompaction({ threadId, controller, compaction, abortController }) {
+    try {
+      const result = await compaction.compactNow(controller.agent, abortController.signal);
+      if (result == null && !abortController.signal.aborted) {
+        this.warnThread(threadId, 'No compactable history yet.');
+      }
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        this.warnThread(threadId, 'Compaction cancelled.');
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        this.warnThread(threadId, message);
+        this.diagnostics(`manual compaction failed for ${threadId}: ${message}`);
+      }
+    } finally {
+      if (this.manualCompactions().get(threadId) === abortController) {
+        this.manualCompactions().delete(threadId);
+      }
+    }
+  }
+
+  turnInterruptProduct(params = {}) {
+    const threadId = String(params.threadId ?? '');
+    if (String(params.turnId ?? '').startsWith('dsh-maintenance-compaction-')) {
+      const active = this.manualCompactions().get(threadId);
+      if (active) {
+        active.abort(new Error('user cancelled DSH compaction'));
+        return { result: {} };
+      }
+    }
+    return super.turnInterrupt(params);
   }
 
   async threadResume(params = {}) {
@@ -256,6 +321,7 @@ export class DshxProductAdapter extends DshAppServerAdapter {
 
   async threadUnsubscribeWithStatus(params = {}) {
     const threadId = String(params.threadId ?? '');
+    this.manualCompactions().get(threadId)?.abort(new Error('thread unsubscribed'));
     const subscribed = this.controllers.has(threadId);
     const loaded = Boolean(this.driver.getLive(threadId));
     await super.threadUnsubscribe(params);
@@ -342,5 +408,13 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     }
     controller.steer(textInput(params));
     return { result: { turnId: location.turnId } };
+  }
+
+  async close() {
+    for (const controller of this.manualCompactions().values()) {
+      controller.abort(new Error('DSHX adapter closing'));
+    }
+    this.manualCompactions().clear();
+    await super.close();
   }
 }
