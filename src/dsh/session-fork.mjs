@@ -6,59 +6,50 @@ function turnNumber(turnId) {
   return value;
 }
 
-function openTurn(events) {
-  let open = null;
-  for (const event of events ?? []) {
-    if (event?.type === 'turn/start') open = event.data?.turn;
-    else if (event?.type === 'turn/end' && event.data?.turn === open) open = null;
-  }
-  return open;
-}
-
-function cutAfterCompletedTurn(events, target) {
-  const end = events.findIndex((event) => event?.type === 'turn/end' && event.data?.turn === target);
-  if (end < 0) throw new Error(`DSH session has no completed dsh-turn-${target}`);
-
-  // Match the official DSH Host fork contract: keep standalone durable events
-  // that landed after the selected completed turn (for example session/title),
-  // but never copy the next turn/start or anything owned by that later turn.
-  let cut = end + 1;
-  while (cut < events.length && events[cut]?.type !== 'turn/start') cut += 1;
-  return cut;
+function completedTurnEnd(events, turn) {
+  return (events ?? []).find((event) => event?.type === 'turn/end' && event.data?.turn === turn);
 }
 
 /**
- * Select the exact durable DSH event prefix represented by Codex fork params.
- * No event is synthesized or rewritten: the returned array contains existing
- * SessionEvent objects and is handed to the official AgentFactory seed seam.
- *
- * The default fork follows DSH Host semantics: fork through the latest
- * completed turn and include trailing standalone events up to (but excluding)
- * the next turn/start. A currently-open later turn is therefore never copied.
+ * Translate Codex's fork presentation anchors into the one `atSeq` hint owned
+ * by DSH Host `sessions.fork`. This function deliberately does NOT select or
+ * copy a seed, decide lineage, inherit model state, or create a Session.
  */
-export function dshForkSeed(events = [], { lastTurnId, beforeTurnId } = {}) {
+export function codexForkAtSeq(events = [], { lastTurnId, beforeTurnId } = {}) {
   if (lastTurnId != null && beforeTurnId != null) {
     throw new Error('thread/fork lastTurnId and beforeTurnId are mutually exclusive');
   }
 
-  if (beforeTurnId != null) {
-    const target = turnNumber(beforeTurnId);
-    const start = events.findIndex((event) => event?.type === 'turn/start' && event.data?.turn === target);
-    if (start < 0) throw new Error(`DSH session has no ${beforeTurnId}`);
-    return events.slice(0, start);
-  }
-
   if (lastTurnId != null) {
-    const target = turnNumber(lastTurnId);
-    return events.slice(0, cutAfterCompletedTurn(events, target));
+    const turn = turnNumber(lastTurnId);
+    const end = completedTurnEnd(events, turn);
+    if (!end || !Number.isInteger(end.seq)) {
+      throw new Error(`DSH session has no completed ${lastTurnId}`);
+    }
+    return end.seq;
   }
 
-  const latestEnd = events.findLast?.((event) => event?.type === 'turn/end')
-    ?? [...events].reverse().find((event) => event?.type === 'turn/end');
-  if (!latestEnd || !Number.isInteger(latestEnd.data?.turn)) {
-    throw new Error('DSH session has no completed turn to fork from');
+  if (beforeTurnId != null) {
+    const turn = turnNumber(beforeTurnId);
+    const start = (events ?? []).find((event) => event?.type === 'turn/start' && event.data?.turn === turn);
+    if (!start || !Number.isInteger(start.seq)) {
+      throw new Error(`DSH session has no ${beforeTurnId}`);
+    }
+    const priorEnds = (events ?? []).filter((event) =>
+      event?.type === 'turn/end'
+      && Number.isInteger(event.seq)
+      && event.seq < start.seq
+    );
+    const prior = priorEnds.at(-1);
+    if (!prior) {
+      throw new Error('DSH Host fork cannot represent a Codex beforeTurnId before the first completed turn');
+    }
+    return prior.seq;
   }
-  return events.slice(0, cutAfterCompletedTurn(events, latestEnd.data.turn));
+
+  // Omission is meaningful: the official DSH Host chooses the latest completed
+  // turn, including its own handling for live/cold sessions and open tails.
+  return undefined;
 }
 
-export const forkInternals = { turnNumber, openTurn, cutAfterCompletedTurn };
+export const forkInternals = { turnNumber, completedTurnEnd };
