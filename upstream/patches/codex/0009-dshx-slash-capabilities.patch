@@ -1,0 +1,81 @@
+diff --git a/codex-rs/tui/src/slash_command.rs b/codex-rs/tui/src/slash_command.rs
+--- a/codex-rs/tui/src/slash_command.rs
++++ b/codex-rs/tui/src/slash_command.rs
+@@ -76,7 +76,7 @@ impl SlashCommand {
+         match self {
+             SlashCommand::Feedback => "send logs to maintainers",
+             SlashCommand::New => "start a new chat during a conversation",
+-            SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
++            SlashCommand::Init => "create an AGENTS.md file with instructions for DeepSeek Harness",
+             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+             SlashCommand::Review => "review my current changes and find issues",
+             SlashCommand::Rename => "rename the current thread",
+@@ -86,7 +86,7 @@ impl SlashCommand {
+             SlashCommand::Delete => "permanently delete this session and exit",
+             SlashCommand::Clear => "clear the terminal and start a new chat",
+             SlashCommand::Fork => "fork the current chat",
+             SlashCommand::App => "continue this session in the Desktop app",
+-            SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
++            SlashCommand::Quit | SlashCommand::Exit => "exit DSHX",
+             SlashCommand::Copy => "copy last response as markdown",
+             SlashCommand::Export => "export the conversation as markdown",
+             SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
+@@ -94,7 +94,7 @@ impl SlashCommand {
+             SlashCommand::Diff => "show git diff (including untracked files)",
+             SlashCommand::Mention => "mention a file",
+-            SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
++            SlashCommand::Skills => "use skills to improve how DeepSeek Harness performs specific tasks",
+             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
+             SlashCommand::Hooks => "view and manage lifecycle hooks",
+@@ -128,7 +128,7 @@ impl SlashCommand {
+             SlashCommand::Side | SlashCommand::Btw => {
+                 "start a side conversation in an ephemeral fork"
+             }
+-            SlashCommand::Permissions => "choose what Codex is allowed to do",
++            SlashCommand::Permissions => "choose what DeepSeek Harness is allowed to do",
+@@ -251,6 +251,42 @@ impl SlashCommand {
+     }
+ 
+     fn is_visible(self) -> bool {
++        if crate::dshx_backend()
++            && matches!(
++                self,
++                SlashCommand::Ide
++                    | SlashCommand::ElevateSandbox
++                    | SlashCommand::SandboxReadRoot
++                    | SlashCommand::Experimental
++                    | SlashCommand::AutoReview
++                    | SlashCommand::Memories
++                    | SlashCommand::Import
++                    | SlashCommand::Hooks
++                    | SlashCommand::Review
++                    | SlashCommand::Archive
++                    | SlashCommand::Delete
++                    | SlashCommand::App
++                    | SlashCommand::Plan
++                    | SlashCommand::Goal
++                    | SlashCommand::Agents
++                    | SlashCommand::MultiAgents
++                    | SlashCommand::Side
++                    | SlashCommand::Btw
++                    | SlashCommand::Diff
++                    | SlashCommand::Cd
++                    | SlashCommand::Usage
++                    | SlashCommand::DebugConfig
++                    | SlashCommand::Ps
++                    | SlashCommand::Stop
++                    | SlashCommand::Mcp
++                    | SlashCommand::Apps
++                    | SlashCommand::Plugins
++                    | SlashCommand::Logout
++                    | SlashCommand::Feedback
++                    | SlashCommand::Personality
++                    | SlashCommand::MemoryDrop
++                    | SlashCommand::MemoryUpdate
++            )
++        {
++            return false;
++        }
+         match self {
+             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
+             SlashCommand::Copy => !cfg!(target_os = "android"),
