@@ -31,6 +31,29 @@ Pinned DSH commit: `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`
 | Session listing | `ctx.sessionPersistence.list()` / `listSnapshots()` | Populate resume picker | Verified |
 | Session inspection | `ctx.sessionPersistence.inspect(id)` | Read immutable history for resume/details | Verified |
 | Session persistence/crash repair | `ctx.sessionPersistence` implementations | **None** — DSH owns durability and repair | Upstream-owned |
+| Permission preset list/current | `ctx.permissionPresets.names`, `optionOf()`, `current(session.events)` | Populate Codex-style permissions selector | Verified |
+| Permission preset switch | `ctx.permissionPresets.set(session, name)` | Delegate selected value; do not write sandbox/approval events ourselves | Verified |
+| Effective file sandbox | `ctx.sandboxPolicy.resolve({ session })` | Present DSH enforcement as an external sandbox | Verified |
+| Effective approval policy | `ctx.approval.overrideOf(session)` + `ctx.approval.config.policy` | Map `ask → on-request`, `never → never` | Verified |
+| Interactive approval request | scoped `approval/request` waterfall | Present only when Codex has a faithful UI for that DSH tool; otherwise delegate/fail closed | Verified |
+| Approval audit | `approval/asked` / `approval/decided` | Read/render if useful; never use audit events as the answer channel | Verified |
+
+## Permission semantic notes
+
+DSH sandbox mode governs **filesystem effects only**. Its public sandbox contract explicitly states that network and process visibility are outside the sandbox vocabulary. Codex's legacy `SandboxPolicy` combines filesystem and network presentation fields, so DSHX must not claim that a DSH confined session is a Codex-native `workspaceWrite`/`readOnly` policy with invented network semantics.
+
+DSHX therefore projects confined DSH modes as Codex `externalSandbox` for the legacy field and keeps the actual DSH preset name/options as the user-facing source of truth. `danger-full-access` has an exact legacy Codex representation and may be projected directly.
+
+DSH approval outcomes are closed and fail-closed:
+
+```text
+allowed-once
+rejected
+cancelled
+unavailable
+```
+
+Only `allowed-once` is a grant. Codex's `acceptForSession` has **no faithful DSH equivalent** and must not be offered for DSH-backed approvals. The TUI needs a narrow backend-aware patch that keeps one-shot accept / decline / cancel while hiding session-wide approval. Unknown plugin-tool approvals are not misclassified as shell/file approvals; an unclaimed request naturally falls through to DSH's `unavailable` outcome.
 
 ## DSH events observed at the pinned commit
 
@@ -49,6 +72,11 @@ tool/result
 todo/write
 request/header
 request/context
+approval/asked
+approval/decided
+approval/policy
+sandbox/mode
+permission/preset
 ```
 
 The adapter must treat the vocabulary as merge-extensible. Unknown plugin events are valid DSH events; DSHX may ignore explicitly ignorable presentation events but must not reinterpret required unknown events as known capabilities.
@@ -65,6 +93,7 @@ ctx.llm adapters and routing
 tool execution
 sandbox
 approval policy
+permission presets
 skills
 subagents
 plugins
@@ -89,8 +118,8 @@ For every UI feature:
 The following surfaces need further public-API verification before implementation:
 
 - Enumerating the current DSH model/provider catalog for `/model` without relying on private registry fields.
-- Exact public approval request/result event seam used by the active DSH permission composition.
 - Ask-user event/tool presentation seam and cancellation semantics.
+- Exact built-in DSH tool-name/meta contracts needed to specialize generic tool cells into Codex shell/file/diff cells.
 - Skills/subagents/jobs/plugin UI capability discovery for later milestones.
 
 Those are adapter research tasks, not invitations to implement the capabilities in DSHX.
