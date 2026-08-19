@@ -3,10 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import pty from 'node-pty';
+import * as pty from 'node-pty';
 import { startProtocolStubServer } from '../src/server.mjs';
 
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, (match) => match.slice(1)));
 const TOKEN = 'dshx-conpty-smoke-token-0123456789abcdefghijklmnopqrstuvwxyz';
 
 function stripTerminalControl(value) {
@@ -25,20 +24,24 @@ function stringEnv(extra = {}) {
 }
 
 function waitForOutput(state, needle, timeoutMs = 30_000) {
-  if (stripTerminalControl(state.output).includes(needle)) return Promise.resolve();
+  const started = Date.now();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      dispose.dispose();
-      reject(new Error(`Timed out waiting for ${JSON.stringify(needle)}. Transcript:\n${stripTerminalControl(state.output)}`));
-    }, timeoutMs);
-    const dispose = state.term.onData((chunk) => {
-      state.output += chunk;
-      if (!stripTerminalControl(state.output).includes(needle)) return;
-      clearTimeout(timer);
-      dispose.dispose();
-      resolve();
-    });
+    const poll = setInterval(() => {
+      const transcript = stripTerminalControl(state.output);
+      if (transcript.includes(needle)) {
+        clearInterval(poll);
+        resolve();
+        return;
+      }
+      if (Date.now() - started < timeoutMs) return;
+      clearInterval(poll);
+      reject(new Error(`Timed out waiting for ${JSON.stringify(needle)}. Transcript:\n${transcript}`));
+    }, 50);
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 if (process.platform !== 'win32') {
@@ -51,6 +54,7 @@ if (!fs.existsSync(binary)) throw new Error(`built DSHX TUI missing: ${binary}`)
 const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-conpty-home-'));
 const server = await startProtocolStubServer({ token: TOKEN, eventDelayMs: 8 });
 let term;
+let dataDisposable;
 try {
   term = pty.spawn(binary, [], {
     name: 'xterm-256color',
@@ -64,8 +68,8 @@ try {
       DSHX_APP_SERVER_TOKEN: TOKEN
     })
   });
-  const state = { term, output: '' };
-  term.onData((chunk) => { state.output += chunk; });
+  const state = { output: '' };
+  dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
   await waitForOutput(state, 'DeepSeek Harness');
   term.write('smoke from conpty\r');
@@ -73,7 +77,11 @@ try {
   await waitForOutput(state, 'smoke from conpty');
   process.stdout.write('Windows ConPTY DSHX TUI smoke passed\n');
 } finally {
+  dataDisposable?.dispose?.();
   try { term?.kill(); } catch {}
+  // Let the killed TUI close its WebSocket before asking ws.Server.close() to
+  // wait for all clients; this keeps failures bounded on busy hosted runners.
+  await sleep(100);
   await server.close();
   fs.rmSync(codexHome, { recursive: true, force: true });
 }
