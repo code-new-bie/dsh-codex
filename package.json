@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex",
-  "version": "0.0.0-m0",
+  "version": "0.0.0-m1",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,11 +11,15 @@
   },
   "scripts": {
     "test": "node --test",
-    "test:protocol": "node --test test/protocol.test.mjs",
+    "test:protocol": "node --test test/protocol.test.mjs test/wire.test.mjs",
+    "test:dsh": "node --test test/dsh-*.test.mjs",
     "stub": "node ./bin/dshx-stub-server.mjs",
     "dev": "node ./bin/dshx.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.7",
     "ws": "^8.18.0"
   }
 }
