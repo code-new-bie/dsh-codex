@@ -36,12 +36,10 @@ try {
   if (missing.length > 0) {
     throw new Error(`official DSH composition is missing required presentation services: ${missing.join(', ')}`);
   }
-  const commands = ctx.get('commands');
-  const commandNames = new Set((commands?.list?.() ?? []).map((entry) => entry.name));
-  if (!commandNames.has('compact')) {
-    throw new Error('official DSH composition does not register the /compact command required by DSHX');
-  }
-  process.stdout.write(`official DSH runtime booted: ${REQUIRED_SERVICES.join(', ')}; /compact registered\n`);
+  // Command discovery is Agent-scoped in DSH rc.8. Do not invent a fake Agent
+  // just to inspect /compact here: the product-level delegation test proves the
+  // command call shape, while this smoke proves the official shipped services compose.
+  process.stdout.write(`official DSH runtime booted: ${REQUIRED_SERVICES.join(', ')}\n`);
 } finally {
   clearTimeout(timer);
   await ctx?.dispose?.();
