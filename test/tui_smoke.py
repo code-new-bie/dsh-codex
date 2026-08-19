@@ -7,14 +7,10 @@ import tempfile
 import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-TOKEN = "dshx-pty-smoke-token-0123456789abcdefghijklmnopqrstuvwxyz"
-
-server_env = os.environ.copy()
-server_env["DSHX_STUB_TOKEN"] = TOKEN
 server = subprocess.Popen(
-    ["node", "bin/dshx-stub-server.mjs"],
+    ["node", "bin/dshx-stub-local.mjs"],
     cwd=ROOT,
-    env=server_env,
+    env=os.environ.copy(),
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     text=True,
@@ -22,9 +18,9 @@ server = subprocess.Popen(
 
 try:
     endpoint = server.stdout.readline().strip()
-    if not endpoint.startswith("ws://127.0.0.1:"):
+    if not endpoint.startswith("unix://"):
         stderr = server.stderr.read()
-        raise RuntimeError(f"stub did not produce a loopback endpoint: {endpoint!r}\n{stderr}")
+        raise RuntimeError(f"local stub did not produce a unix endpoint: {endpoint!r}\n{stderr}")
 
     binary = ROOT / "dist" / "bin" / "dshx-tui"
     if not binary.exists():
@@ -36,7 +32,6 @@ try:
             "TERM": "xterm-256color",
             "CODEX_HOME": codex_home,
             "DSHX_APP_SERVER_ENDPOINT": endpoint,
-            "DSHX_APP_SERVER_TOKEN": TOKEN,
         })
         child = pexpect.spawn(
             str(binary),
@@ -57,7 +52,7 @@ try:
             transcript.append(child.before + child.after)
         except Exception:
             transcript.append(child.before or "")
-            raise AssertionError("Pinned DSHX TUI smoke failed. Transcript:\n" + "".join(transcript))
+            raise AssertionError("Pinned DSHX TUI local-IPC smoke failed. Transcript:\n" + "".join(transcript))
         finally:
             child.close(force=True)
 finally:

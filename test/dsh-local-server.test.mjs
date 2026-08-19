@@ -1,14 +1,62 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { WebSocket } from 'ws';
 import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
 
-const TOKEN = '0123456789abcdefghijklmnopqrstuvwxyz-DSHX-token';
+class FakeChild extends EventEmitter {
+  constructor() {
+    super();
+    this.stdin = new PassThrough();
+    this.stdout = new PassThrough();
+    this.stderr = new PassThrough();
+    this.exitCode = null;
+    this.signalCode = null;
+    this.killed = false;
+    this.stdin.once('finish', () => this.exit(0, null));
+  }
+  exit(code, signal) {
+    if (this.exitCode !== null || this.signalCode !== null) return;
+    this.exitCode = code;
+    this.signalCode = signal;
+    queueMicrotask(() => this.emit('exit', code, signal));
+  }
+  kill(signal = 'SIGTERM') {
+    this.killed = true;
+    this.exit(null, signal);
+    return true;
+  }
+}
 
-function once(socket, event) {
+function fakeBridgeSpawner() {
+  let child;
+  return {
+    spawn() {
+      child = new FakeChild();
+      queueMicrotask(() => child.stdout.write('{"dshxBridge":"ready"}\n'));
+      return child;
+    },
+    child() {
+      return child;
+    }
+  };
+}
+
+function readJsonLine(stream) {
   return new Promise((resolve, reject) => {
-    socket.once(event, resolve);
-    socket.once('error', reject);
+    let buffer = '';
+    const onData = (chunk) => {
+      buffer += chunk.toString('utf8');
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) return;
+      stream.off('data', onData);
+      try {
+        resolve(JSON.parse(buffer.slice(0, newline)));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    stream.on('data', onData);
   });
 }
 
@@ -25,56 +73,47 @@ class FakeAdapter {
   }
 }
 
-test('local server rejects unauthenticated WebSocket clients', async () => {
-  const runtime = { async dispose() {} };
-  const server = await startDshxLocalServer({ runtime, token: TOKEN, Adapter: FakeAdapter });
+test('local production transport exposes only a unix endpoint and relays RPC over bridge stdio', async () => {
+  let disposed = 0;
+  FakeAdapter.closes = 0;
+  const fake = fakeBridgeSpawner();
+  const runtime = { async dispose() { disposed += 1; } };
+  const server = await startDshxLocalServer({
+    runtime,
+    Adapter: FakeAdapter,
+    bridgeCommand: 'fake-dshx-ipc-bridge',
+    spawnBridge: (...args) => fake.spawn(...args)
+  });
   try {
-    const socket = new WebSocket(server.url);
-    const status = await new Promise((resolve) => {
-      socket.once('unexpected-response', (_request, response) => resolve(response.statusCode));
-      socket.once('error', () => {});
-    });
-    assert.equal(status, 401);
-    socket.terminate();
+    assert.match(server.url, /^unix:\/\//);
+    assert.equal('token' in server, false);
+
+    const response = readJsonLine(fake.child().stdin);
+    fake.child().stdout.write(`${JSON.stringify({ id: 7, method: 'initialize', params: {} })}\n`);
+    assert.deepEqual(await response, { id: 7, result: { echoed: 'initialize' } });
   } finally {
     await server.close();
   }
-});
-
-test('local server accepts bearer-authenticated RPC and disposes presentation/runtime state', async () => {
-  let disposed = 0;
-  FakeAdapter.closes = 0;
-  const runtime = { async dispose() { disposed += 1; } };
-  const server = await startDshxLocalServer({ runtime, token: TOKEN, Adapter: FakeAdapter });
-  const socket = new WebSocket(server.url, { headers: { Authorization: `Bearer ${TOKEN}` } });
-  await once(socket, 'open');
-
-  const response = new Promise((resolve, reject) => {
-    socket.once('message', (data) => {
-      try { resolve(JSON.parse(data.toString('utf8'))); } catch (error) { reject(error); }
-    });
-  });
-  socket.send(JSON.stringify({ id: 7, method: 'initialize', params: {} }));
-  assert.deepEqual(await response, { id: 7, result: { echoed: 'initialize' } });
-
-  socket.close();
-  await once(socket, 'close');
-  await server.close();
   assert.equal(FakeAdapter.closes, 1);
   assert.equal(disposed, 1);
 });
 
-test('local server permits only one active TUI client', async () => {
+test('local production transport returns JSON-RPC parse errors through bridge stdio', async () => {
+  const fake = fakeBridgeSpawner();
   const runtime = { async dispose() {} };
-  const server = await startDshxLocalServer({ runtime, token: TOKEN, Adapter: FakeAdapter });
-  const headers = { Authorization: `Bearer ${TOKEN}` };
-  const first = new WebSocket(server.url, { headers });
-  await once(first, 'open');
-  const second = new WebSocket(server.url, { headers });
-  await once(second, 'open');
-  const [code] = await once(second, 'close');
-  assert.equal(code, 1008);
-  first.close();
-  await once(first, 'close');
-  await server.close();
+  const server = await startDshxLocalServer({
+    runtime,
+    Adapter: FakeAdapter,
+    bridgeCommand: 'fake-dshx-ipc-bridge',
+    spawnBridge: (...args) => fake.spawn(...args)
+  });
+  try {
+    const response = readJsonLine(fake.child().stdin);
+    fake.child().stdout.write('{not-json}\n');
+    const parsed = await response;
+    assert.equal(parsed.id, null);
+    assert.equal(parsed.error.code, -32700);
+  } finally {
+    await server.close();
+  }
 });

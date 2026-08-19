@@ -1,0 +1,59 @@
+# 1.0 release readiness
+
+This file defines the evidence required before a DSHX release candidate may be promoted to 1.0. It intentionally distinguishes **implemented checks** from **checks that have actually passed on a release candidate**.
+
+## Rule
+
+No item becomes green because code for the check exists. A release candidate is green only when the corresponding GitHub Actions job or documented manual acceptance run has passed for the exact candidate commit/tag.
+
+## Automated gates
+
+| Gate | Evidence implemented in repository | Required result for 1.0 |
+|---|---|---|
+| Zero-argument launch | `bin/dshx.mjs`, clean-install smoke | pass on supported release artifacts |
+| Official DSH composition | `scripts/runtime-smoke.mjs` on Linux/Windows/macOS | pass |
+| Exact DSH dependency closure | `scripts/verify-dsh-closure.mjs`, release shrinkwrap | pass |
+| DSH ownership boundary | adapter/unit tests + CI ownership assertions | pass |
+| Approval/permission fail-closed | approval/permission/subagent authority tests | pass |
+| Session resume/durability projection | DSH `agents.resume`, persistence projection and resume tests; persisted model/header wins over machine default | pass |
+| Local production transport | no production `WebSocketServer`; TUI rejects TCP WebSocket endpoint | pass |
+| Cross-platform local IPC data plane | `dshx-ipc-bridge --check` performs real UDS + WebSocket ping/pong | pass on Linux/Windows/macOS |
+| Real pinned TUI lifecycle | PTY smoke drives pinned TUI through local IPC deterministic adapter | pass on Linux release gate |
+| Packaging | platform tarball + static local-import closure check + exact DSH shrinkwrap | pass |
+| Clean installation | install generated tarball then `dshx --version` + `dshx doctor` | pass on every release platform |
+| Release artifacts | Linux x64, Windows x64, macOS arm64, macOS x64 | all built |
+| Integrity | release `SHA256SUMS` | published |
+| Codex thin-fork invariants | patch application/build plus CI source assertions | pass |
+
+## Manual UX acceptance gate
+
+The automated suite cannot establish visual/input parity for terminal/IME behavior. For the exact 1.0 release candidate, perform a side-by-side run against the pinned Codex TUI using the same terminal dimensions/theme and record pass/fail for:
+
+- Windows Terminal startup, resize, scroll and mouse behavior;
+- Chinese IME composition/commit/cancel in the multiline composer;
+- wide CJK glyph alignment in transcript/tool/diff cells;
+- slash completion and help keyboard behavior;
+- model and permission pickers;
+- approval and ask-user overlays;
+- shell/tool streaming and collapse behavior;
+- unified diff review;
+- plan/reasoning cells when DSH exposes them;
+- steering and Ctrl+C interrupt during an active turn;
+- resume picker and restored session/model state;
+- status/footer rendering.
+
+Any difference is either fixed, documented as a deliberate product difference in `docs/UX-PARITY.md`, or blocks 1.0.
+
+## Promotion procedure
+
+1. Freeze the candidate commit and ensure the supported Codex/DSH pins are unchanged during validation.
+2. Run the full CI workflow for that exact commit.
+3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install gate to pass.
+4. Install the generated release artifact for the manual Windows Terminal/CJK/IME side-by-side acceptance run; do not validate a source checkout instead.
+5. Resolve every failed gate without weakening a DSH ownership or security boundary.
+6. Re-run affected automated and manual gates after fixes.
+7. Promote only a commit/tag for which all required evidence is green.
+
+## Current integration note
+
+`agent/production-ipc` / Draft PR #8 is the production-transport integration branch. The repository contains the automated gates above, but their existence is **not** a statement that a particular candidate has passed GitHub Actions. Consult the Actions/check status for the exact head before merging or tagging.

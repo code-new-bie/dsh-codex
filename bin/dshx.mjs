@@ -13,7 +13,7 @@ const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const VERSION = PACKAGE.version;
 
 function usage() {
-  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
+  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI, local IPC and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_IPC_BRIDGE_BIN      Override the packaged local IPC bridge (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
 }
 
 function packagedTuiBinary() {
@@ -22,6 +22,16 @@ function packagedTuiBinary() {
     process.env.DSHX_TUI_BIN,
     path.join(ROOT, 'dist', 'bin', name),
     path.join(ROOT, '.build', 'codex', 'release', process.platform === 'win32' ? 'codex-tui.exe' : 'codex-tui')
+  ].filter(Boolean);
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+function packagedIpcBridgeBinary() {
+  const name = process.platform === 'win32' ? 'dshx-ipc-bridge.exe' : 'dshx-ipc-bridge';
+  const candidates = [
+    process.env.DSHX_IPC_BRIDGE_BIN,
+    path.join(ROOT, 'dist', 'bin', name),
+    path.join(ROOT, '.build', 'codex', 'release', name)
   ].filter(Boolean);
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
@@ -51,6 +61,10 @@ function doctor() {
   const tuiCheck = executable && fs.existsSync(executable)
     ? spawnSync(executable, ['--version'], { encoding: 'utf8' })
     : { status: 127, stdout: '', stderr: '' };
+  const bridge = packagedIpcBridgeBinary();
+  const bridgeCheck = bridge && fs.existsSync(bridge)
+    ? spawnSync(bridge, ['--check'], { encoding: 'utf8' })
+    : { status: 127, stdout: '', stderr: '' };
 
   let runtimeDetail;
   let runtimeOk = false;
@@ -77,6 +91,15 @@ function doctor() {
           : 'not found',
       tuiCheck.status === 0
     ],
+    [
+      'Local IPC bridge',
+      bridgeCheck.status === 0
+        ? `${bridge} (cross-platform Codex UDS)`
+        : bridge
+          ? `${bridge} is not built/runnable${bridgeCheck.stderr ? `: ${bridgeCheck.stderr.trim()}` : ''}`
+          : 'not found',
+      bridgeCheck.status === 0
+    ],
     ['DeepSeek Harness', runtimeDetail, runtimeOk],
     ['Presentation home', dshxTuiHome(), true]
   ];
@@ -86,8 +109,8 @@ function doctor() {
   if (rows.some((row) => !row[2])) {
     process.stderr.write(
       process.platform === 'win32'
-        ? 'For a source checkout, build the pinned TUI with `.\\scripts\\build-codex-tui.ps1`; packaged releases include it.\n'
-        : 'For a source checkout, build the pinned TUI with `./scripts/build-codex-tui.sh`; packaged releases include it.\n'
+        ? 'For a source checkout, build the pinned TUI + IPC bridge with `.\\scripts\\build-codex-tui.ps1`; packaged releases include both.\n'
+        : 'For a source checkout, build the pinned TUI + IPC bridge with `./scripts/build-codex-tui.sh`; packaged releases include both.\n'
     );
     process.exitCode = 1;
   }
@@ -124,6 +147,13 @@ async function run() {
     process.exitCode = 127;
     return;
   }
+  const bridge = packagedIpcBridgeBinary();
+  if (!bridge || !fs.existsSync(bridge)) {
+    process.stderr.write(`dshx: packaged local IPC bridge not found (${bridge ?? 'unknown path'})\n`);
+    process.stderr.write('Run `dshx doctor` for build/install guidance.\n');
+    process.exitCode = 127;
+    return;
+  }
 
   const tuiHome = dshxTuiHome();
   try {
@@ -138,9 +168,14 @@ async function run() {
   const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
   let local;
   try {
-    local = await startDshxLocalServer({ cwd: process.cwd(), version: VERSION, log });
+    local = await startDshxLocalServer({
+      cwd: process.cwd(),
+      version: VERSION,
+      bridgeCommand: bridge,
+      log
+    });
   } catch (error) {
-    process.stderr.write(`dshx: failed to boot DeepSeek Harness: ${error instanceof Error ? error.message : error}\n`);
+    process.stderr.write(`dshx: failed to boot DeepSeek Harness/local IPC: ${error instanceof Error ? error.message : error}\n`);
     process.exitCode = 1;
     return;
   }
@@ -153,8 +188,7 @@ async function run() {
       // component only and must not read/write the user's ordinary Codex state.
       CODEX_HOME: tuiHome,
       ...launch.resumeEnv,
-      DSHX_APP_SERVER_ENDPOINT: local.url,
-      DSHX_APP_SERVER_TOKEN: local.token
+      DSHX_APP_SERVER_ENDPOINT: local.url
     },
     stdio: 'inherit',
     windowsHide: false

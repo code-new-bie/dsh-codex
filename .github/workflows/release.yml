@@ -43,18 +43,40 @@ jobs:
           npm install
           node scripts/verify-dsh-closure.mjs
           npm test
-      - name: Build pinned TUI and package (Unix)
+      - name: Boot official DSH runtime
+        run: node scripts/runtime-smoke.mjs
+      - name: Build pinned TUI and local IPC bridge (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: |
-          bash scripts/build-codex-tui.sh
-          node scripts/package-platform.mjs
-      - name: Build pinned TUI and package (Windows)
+        run: bash scripts/build-codex-tui.sh
+      - name: Build pinned TUI and local IPC bridge (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-codex-tui.ps1
+      - name: Verify local IPC data plane (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: dist/bin/dshx-ipc-bridge --check
+      - name: Verify local IPC data plane (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          ./scripts/build-codex-tui.ps1
-          node scripts/package-platform.mjs
+          & .\dist\bin\dshx-ipc-bridge.exe --check
+          if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
+      - name: Real pinned TUI local-IPC PTY smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python3 -m pip install --user pexpect
+          python3 test/tui_smoke.py
+      - name: Build installable platform tarball (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: node scripts/package-platform.mjs
+      - name: Build installable platform tarball (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/package-platform.mjs
       - name: Clean install smoke (Unix)
         if: runner.os != 'Windows'
         shell: bash

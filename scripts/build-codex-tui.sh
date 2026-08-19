@@ -11,7 +11,11 @@ mkdir -p "$OUT_DIR"
 CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
   --manifest-path "$CODEX_DIR/codex-rs/Cargo.toml" \
   --locked --release -p codex-tui --bin codex-tui
+CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
+  --manifest-path "$CODEX_DIR/codex-rs/Cargo.toml" \
+  --locked --release -p codex-stdio-to-uds --bin dshx-ipc-bridge
 
 cp "$TARGET_DIR/release/codex-tui" "$OUT_DIR/dshx-tui"
-chmod +x "$OUT_DIR/dshx-tui"
-printf '%s\n' "$OUT_DIR/dshx-tui"
+cp "$TARGET_DIR/release/dshx-ipc-bridge" "$OUT_DIR/dshx-ipc-bridge"
+chmod +x "$OUT_DIR/dshx-tui" "$OUT_DIR/dshx-ipc-bridge"
+printf '%s\n' "$OUT_DIR/dshx-tui" "$OUT_DIR/dshx-ipc-bridge"

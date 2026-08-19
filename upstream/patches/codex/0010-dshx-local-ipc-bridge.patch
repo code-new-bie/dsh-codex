@@ -1,0 +1,164 @@
+diff --git a/codex-rs/stdio-to-uds/Cargo.toml b/codex-rs/stdio-to-uds/Cargo.toml
+--- a/codex-rs/stdio-to-uds/Cargo.toml
++++ b/codex-rs/stdio-to-uds/Cargo.toml
+@@ -7,6 +7,10 @@
+ [[bin]]
+ name = "codex-stdio-to-uds"
+ path = "src/main.rs"
++
++[[bin]]
++name = "dshx-ipc-bridge"
++path = "src/dshx_ipc_bridge.rs"
+ 
+ [lib]
+ name = "codex_stdio_to_uds"
+@@ -20,12 +24,14 @@
+ [dependencies]
+ anyhow = { workspace = true }
+ codex-uds = { workspace = true }
++futures = { workspace = true }
+ tokio = { workspace = true, features = [
+     "io-std",
+     "io-util",
+     "macros",
+     "rt-multi-thread",
+ ] }
++tokio-tungstenite = { workspace = true }
+ 
+ [dev-dependencies]
+ codex-utils-cargo-bin = { workspace = true }
+diff --git a/codex-rs/stdio-to-uds/src/dshx_ipc_bridge.rs b/codex-rs/stdio-to-uds/src/dshx_ipc_bridge.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/stdio-to-uds/src/dshx_ipc_bridge.rs
+@@ -0,0 +1,101 @@
++#![deny(clippy::print_stdout)]
++
++use std::io::ErrorKind;
++use std::path::PathBuf;
++
++use anyhow::Context;
++use codex_uds::UnixListener;
++use futures::SinkExt;
++use futures::StreamExt;
++use tokio::io::AsyncBufReadExt;
++use tokio::io::AsyncWriteExt;
++use tokio::io::BufReader;
++use tokio_tungstenite::accept_async;
++use tokio_tungstenite::tungstenite::Message;
++
++struct SocketGuard(PathBuf);
++
++impl Drop for SocketGuard {
++    fn drop(&mut self) {
++        if let Err(err) = std::fs::remove_file(&self.0)
++            && err.kind() != ErrorKind::NotFound
++        {
++            // Best effort only. The launcher removes the unique parent directory.
++        }
++    }
++}
++
++async fn write_line(stdout: &mut tokio::io::Stdout, line: &str) -> anyhow::Result<()> {
++    stdout.write_all(line.as_bytes()).await?;
++    stdout.write_all(b"\n").await?;
++    stdout.flush().await?;
++    Ok(())
++}
++
++#[tokio::main]
++async fn main() -> anyhow::Result<()> {
++    let mut args = std::env::args_os().skip(1);
++    let Some(first) = args.next() else {
++        anyhow::bail!("usage: dshx-ipc-bridge <socket-path>");
++    };
++    if first == std::ffi::OsStr::new("--check") {
++        return Ok(());
++    }
++    if args.next().is_some() {
++        anyhow::bail!("usage: dshx-ipc-bridge <socket-path>");
++    }
++
++    let socket_path = PathBuf::from(first);
++    if let Some(parent) = socket_path.parent() {
++        codex_uds::prepare_private_socket_directory(parent)
++            .await
++            .with_context(|| format!("failed to prepare {}", parent.display()))?;
++    }
++    let mut listener = UnixListener::bind(&socket_path)
++        .await
++        .with_context(|| format!("failed to bind {}", socket_path.display()))?;
++    let _guard = SocketGuard(socket_path.clone());
++
++    // Stdout is a private JSONL control channel to the Node presentation adapter.
++    // Never log to stdout from this process.
++    let mut stdout = tokio::io::stdout();
++    write_line(&mut stdout, r#"{"dshxBridge":"ready"}"#).await?;
++
++    let stream = listener
++        .accept()
++        .await
++        .with_context(|| format!("failed to accept {}", socket_path.display()))?;
++    let mut websocket = accept_async(stream)
++        .await
++        .context("failed to upgrade local DSHX IPC connection")?;
++    let mut stdin_lines = BufReader::new(tokio::io::stdin()).lines();
++
++    loop {
++        tokio::select! {
++            incoming = websocket.next() => {
++                match incoming {
++                    Some(Ok(Message::Text(text))) => write_line(&mut stdout, &text.to_string()).await?,
++                    Some(Ok(Message::Binary(bytes))) => {
++                        let text = String::from_utf8(bytes.to_vec()).context("binary IPC frame was not UTF-8")?;
++                        write_line(&mut stdout, &text).await?;
++                    }
++                    Some(Ok(Message::Ping(payload))) => websocket.send(Message::Pong(payload)).await?,
++                    Some(Ok(Message::Close(_))) | None => break,
++                    Some(Ok(_)) => {}
++                    Some(Err(err)) => return Err(err).context("local DSHX IPC websocket failed"),
++                }
++            }
++            outbound = stdin_lines.next_line() => {
++                match outbound? {
++                    Some(line) => websocket.send(Message::Text(line.into())).await?,
++                    None => {
++                        websocket.close(None).await?;
++                        break;
++                    }
++                }
++            }
++        }
++    }
++
++    Ok(())
++}
+diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
+--- a/codex-rs/tui/src/main.rs
++++ b/codex-rs/tui/src/main.rs
+@@ -72,19 +72,12 @@
+                 "DSHX_APP_SERVER_ENDPOINT is required; DSHX never falls back to the Codex agent runtime"
+             )
+         })?;
+-        let dshx_token = std::env::var("DSHX_APP_SERVER_TOKEN").map_err(|_| {
+-            anyhow::anyhow!(
+-                "DSHX_APP_SERVER_TOKEN is required; DSHX local transport is always authenticated"
+-            )
+-        })?;
+-        let mut dshx_endpoint = resolve_remote_addr(&dshx_endpoint)?;
+-        match &mut dshx_endpoint {
+-            RemoteAppServerEndpoint::WebSocket { auth_token, .. } => {
+-                *auth_token = Some(dshx_token);
+-            }
+-            RemoteAppServerEndpoint::UnixSocket { .. } => {
+-                anyhow::bail!("DSHX production launcher requires authenticated loopback WebSocket transport")
+-            }
++        let dshx_endpoint = resolve_remote_addr(&dshx_endpoint)?;
++        match &dshx_endpoint {
++            RemoteAppServerEndpoint::WebSocket { .. } => anyhow::bail!(
++                "DSHX production launcher forbids TCP WebSocket transport; use the packaged local IPC bridge"
++            ),
++            RemoteAppServerEndpoint::UnixSocket { .. } => {}
+         }
+         let exit_info = run_main(
+             inner,
