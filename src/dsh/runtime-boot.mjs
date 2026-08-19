@@ -1,92 +1,164 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import {
   boot,
   composeEntries,
+  healProfilesModuleFallback,
   loadLayeredEnv,
-  loadOverlayPatches,
-  resolveBundleDir
+  loadOptionalPatches,
+  loadProfile,
+  PROFILE_PATCH_FILENAME
 } from '@deepseek-ai/dsh-app-boot';
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment';
 
 const NAME = 'dshx';
-const ROOT_CONFIG = fileURLToPath(new URL('../../config/dshx-runtime/cordis.yml', import.meta.url));
-const OFFICIAL_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless'];
+const DSH_PROFILE_BIN_NAME = 'dsh';
+const DEFAULT_PROFILE = 'headless';
+const PROFILE_ROOT_FILENAME = 'cordis.yml';
+const PROFILE_ROOT_CONFIG = `# dshx profile root — composition remains owned by DeepSeek Harness.\n[]\n`;
 const DSHX_SURFACE_PATCHES = [
-  // The official headless bundle is our composition source, but its startup
-  // provider and one-shot runner are themselves a presentation surface. DSHX
-  // replaces only those rows; all Agent/Session/tool/provider services remain
-  // exactly the official headless composition.
+  // The official headless profile is the default because it is the DSH runtime
+  // without a browser surface. Its one-shot CLI startup/runner are themselves
+  // presentation rows, so DSHX replaces only those two rows with Codex TUI.
   { id: 'headless-startup', disabled: true },
   { id: 'headless-runner', disabled: true }
 ];
 
 function installationAnchor() {
-  // @deepseek-ai/dsh is the published closed runtime carrying the official
-  // bundle/plugin dependency closure. It intentionally has no `exports`
-  // restriction, so its package.json is a stable resolution anchor.
+  // @deepseek-ai/dsh is the published profile owner and carries the official
+  // dependency closure. No exports restriction blocks package.json resolution.
   return createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json');
 }
 
-function bundleLayer(packageName, installAnchor) {
-  const configDir = dirname(ROOT_CONFIG);
-  const packageDir = resolveBundleDir(NAME, packageName, installAnchor, configDir);
-  const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
-  const patch = manifest?.dsh?.bundle?.patch;
-  if (typeof patch !== 'string' || patch.length === 0) {
-    throw new Error(`dshx: official bundle ${packageName} declares no dsh.bundle.patch`);
+function selectedProfile(explicit) {
+  const value = explicit ?? process.env.DSHX_PROFILE ?? DEFAULT_PROFILE;
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error('dshx: DSH profile name must be non-empty');
   }
-  return loadOverlayPatches(NAME, join(packageDir, patch));
+  return value.trim();
+}
+
+function profileHome(profile) {
+  // <DSH_HOME>/profiles/<name> -> <DSH_HOME>
+  return dirname(dirname(profile.dir));
+}
+
+function shippedAgentPresetPatch(entries, installAnchor) {
+  const agentPresets = entries.find((entry) => entry.id === 'agent-presets');
+  if (!agentPresets) return [];
+  return [{
+    id: 'agent-presets',
+    config: {
+      ...(agentPresets.config ?? {}),
+      // This is the same installation-owned preset root used by the official
+      // dsh profile launcher. User/writable roots remain owned by the roster.
+      roots: [{ path: join(dirname(installAnchor), 'config', 'agent-presets'), trust: 'system' }]
+    }
+  }];
+}
+
+function telemetryPatch(entries) {
+  if (!process.env.DSH_TELEMETRY_DISABLED) return [];
+  if (!entries.some((entry) => entry.id === 'session-telemetry-otel')) return [];
+  return [{ id: 'session-telemetry-otel', disabled: true }];
 }
 
 /**
- * Return the exact patch list DSHX boots: official base + official headless,
- * then the two presentation-row disables above, then optional DSHX-owned
- * presentation overlays supplied by the caller.
+ * Load the exact official DSH profile layers that DSHX presents.
+ *
+ * Order remains DSH-owned: profile bundle layers -> profile user patch ->
+ * $DSH_HOME/cordis.patch.yml. DSHX then adds only installation-equivalent
+ * launcher patches and its presentation locks. Out-of-tree profile plugins
+ * resolve from the profile directory through DSH's own healed module fallback.
  */
-export function dshxRuntimePatches({ installAnchor = installationAnchor(), overlays = [] } = {}) {
-  return [
-    ...OFFICIAL_BUNDLES.flatMap((name) => bundleLayer(name, installAnchor)),
-    ...structuredClone(DSHX_SURFACE_PATCHES),
-    ...structuredClone(overlays)
+export function dshxRuntimeProfile({
+  profile: explicitProfile,
+  installAnchor = installationAnchor(),
+  home,
+  overlays = []
+} = {}) {
+  const profileName = selectedProfile(explicitProfile);
+  healProfilesModuleFallback(installAnchor, home);
+  const profile = loadProfile(DSH_PROFILE_BIN_NAME, profileName, installAnchor, home);
+  const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME);
+  // Loader requires a real root anchored in the profile directory so
+  // profile-local plugins resolve exactly as they do under `dsh --profile`.
+  writeFileSync(rootConfig, PROFILE_ROOT_CONFIG);
+
+  const bundlePatches = profile.layers.flatMap((layer) => layer.patches);
+  const homePatches = loadOptionalPatches(
+    DSH_PROFILE_BIN_NAME,
+    join(profileHome(profile), PROFILE_PATCH_FILENAME)
+  ) ?? [];
+  const beforeLauncher = composeEntries([[...bundlePatches, ...profile.patches, ...homePatches]]);
+  const launcherPatches = [
+    ...shippedAgentPresetPatch(beforeLauncher, installAnchor),
+    ...telemetryPatch(beforeLauncher),
+    ...structuredClone(overlays),
+    // Last on purpose: a profile may customize DSH capabilities, but it cannot
+    // re-enable a competing presentation runner inside the DSHX process.
+    ...structuredClone(DSHX_SURFACE_PATCHES)
   ];
+
+  return {
+    name: profileName,
+    profile,
+    rootConfig,
+    installAnchor,
+    patches: [
+      ...structuredClone(bundlePatches),
+      ...structuredClone(profile.patches),
+      ...structuredClone(homePatches),
+      ...launcherPatches
+    ]
+  };
 }
 
-/** Offline composition view used by doctor/CI to prove DSHX did not grow a second runtime. */
+/** Exact patch list DSHX boots; exposed for doctor/ownership tests only. */
+export function dshxRuntimePatches(options = {}) {
+  return dshxRuntimeProfile(options).patches;
+}
+
+/** Offline composition view used by doctor/CI; it includes the user's selected DSH profile. */
 export function dshxRuntimeEntries(options = {}) {
   return composeEntries([dshxRuntimePatches(options)]);
 }
 
 /**
- * Boot the official Harness composition in-process and return its root Context.
- * DSHX owns only the surrounding presentation lifetime. The environment
- * snapshot is provided before any config entry mounts, matching the official
- * dsh launcher contract.
+ * Boot the selected official Harness profile in-process and return its root Context.
+ * DSHX owns only the surrounding presentation lifetime. Environment discovery
+ * intentionally uses the official `dsh` namespace so project and DSH-home .env
+ * behavior stays identical to ordinary Harness launches.
  */
 export async function bootDshxRuntime({
   cwd = process.cwd(),
-  environment = loadLayeredEnv(NAME, cwd),
-  overlays = []
+  profile,
+  environment = loadLayeredEnv(DSH_PROFILE_BIN_NAME, cwd),
+  overlays = [],
+  home
 } = {}) {
-  const installAnchor = installationAnchor();
-  const patches = dshxRuntimePatches({ installAnchor, overlays });
+  const composition = dshxRuntimeProfile({ profile, overlays, home });
   return boot(
     NAME,
-    ROOT_CONFIG,
-    structuredClone(patches),
+    composition.rootConfig,
+    structuredClone(composition.patches),
     (ctx) => {
       ctx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment);
     },
-    pathToFileURL(installAnchor).href
+    pathToFileURL(composition.installAnchor).href
   );
 }
 
 export const runtimeInternals = {
   NAME,
-  ROOT_CONFIG,
-  OFFICIAL_BUNDLES,
+  DSH_PROFILE_BIN_NAME,
+  DEFAULT_PROFILE,
+  PROFILE_ROOT_FILENAME,
+  PROFILE_ROOT_CONFIG,
   DSHX_SURFACE_PATCHES,
-  installationAnchor
+  installationAnchor,
+  selectedProfile,
+  profileHome
 };
