@@ -61,6 +61,12 @@ function turnRecord(id, status, startedAt, completedAt = null, error = null) {
   };
 }
 
+function compactionError(message) {
+  return message == null
+    ? null
+    : { message: String(message), codexErrorInfo: null, additionalDetails: null };
+}
+
 /**
  * Stateful presentation projection of official DSH Session events.
  * Durable truth stays in DSH; all maps here are disposable UI correlation.
@@ -75,6 +81,7 @@ export class DshSessionProjector {
     this.assistantItems = new Map();
     this.reasoningItems = new Map();
     this.tools = new Map();
+    this.compactions = new Map();
     this.currentTurn = null;
     this.latestHeader = null;
     this.latestContext = null;
@@ -90,6 +97,9 @@ export class DshSessionProjector {
       case 'tool/call': return this.toolCall(event);
       case 'tool/result': return this.toolResult(event);
       case 'todo/write': return this.todoWrite(event);
+      case 'compaction/start': return this.compactionStarted(event);
+      case 'compaction/summary': return this.compactionSummarized(event);
+      case 'compaction/end': return this.compactionEnded(event);
       case 'request/header':
         this.latestHeader = event.data?.header ?? null;
         return [];
@@ -123,6 +133,85 @@ export class DshSessionProjector {
       : null;
     if (this.currentTurn === dshTurn) this.currentTurn = null;
     return [{ method: 'turn/completed', params: { threadId: this.threadId, turn: turnRecord(state.id, status, state.startedAt, completedAt, error) } }];
+  }
+
+  compactionStarted(event) {
+    const { compactionId, turn } = event.data ?? {};
+    if (typeof compactionId !== 'string' || compactionId.length === 0) return [];
+    const startedAt = Number.isFinite(event.time) ? Math.floor(event.time / 1000) : nowSeconds();
+    const startedAtMs = Number.isFinite(event.time) ? event.time : nowMillis();
+    const item = { type: 'contextCompaction', id: `dsh-compaction-${compactionId}` };
+    let turnId;
+    let manual = false;
+    const events = [];
+    if (Number.isInteger(turn)) {
+      const state = this.turns.get(turn);
+      if (!state) return [];
+      turnId = state.id;
+    } else if (turn === null) {
+      manual = true;
+      turnId = `dsh-maintenance-compaction-${compactionId}`;
+      events.push({
+        method: 'turn/started',
+        params: { threadId: this.threadId, turn: turnRecord(turnId, 'inProgress', startedAt) }
+      });
+    } else {
+      return [];
+    }
+    this.compactions.set(compactionId, {
+      compactionId,
+      turnId,
+      manual,
+      startedAt,
+      item,
+      summarized: false
+    });
+    events.push({
+      method: 'item/started',
+      params: { threadId: this.threadId, turnId, startedAtMs, item }
+    });
+    return events;
+  }
+
+  compactionSummarized(event) {
+    const compactionId = event.data?.compactionId;
+    const state = this.compactions.get(compactionId);
+    if (state) state.summarized = true;
+    return [];
+  }
+
+  compactionEnded(event) {
+    const { compactionId, error } = event.data ?? {};
+    const state = this.compactions.get(compactionId);
+    if (!state) return [];
+    this.compactions.delete(compactionId);
+    const completedAtMs = Number.isFinite(event.time) ? event.time : nowMillis();
+    const completedAt = Math.floor(completedAtMs / 1000);
+    const events = [{
+      method: 'item/completed',
+      params: {
+        threadId: this.threadId,
+        turnId: state.turnId,
+        completedAtMs,
+        item: state.item
+      }
+    }];
+    if (state.manual) {
+      events.push({
+        method: 'turn/completed',
+        params: {
+          threadId: this.threadId,
+          turn: turnRecord(
+            state.turnId,
+            error == null ? 'completed' : 'failed',
+            state.startedAt,
+            completedAt,
+            compactionError(error)
+          )
+        }
+      });
+    }
+    return events;
   }
 
   assistantChunk(event) {
