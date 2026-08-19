@@ -1,0 +1,50 @@
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -199,6 +199,10 @@ const TUI_LOG_FILE_NAME: &str = "codex-tui.log";
+ const INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 500);
+ 
++fn dshx_backend() -> bool {
++    std::env::var_os("DSHX_APP_SERVER_ENDPOINT").is_some()
++}
++
+ #[cfg(unix)]
+ const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
+     std::time::Duration::from_millis(50);
+@@ -1071,7 +1075,9 @@ pub async fn run_main(
+         }
+     }
+     let remote_project_trust =
+-        if uses_remote_workspace && let Some(remote_cwd) = remote_cwd_override.as_deref() {
++        if !dshx_backend()
++            && uses_remote_workspace
++            && let Some(remote_cwd) = remote_cwd_override.as_deref() {
+             match startup_draft
+                 .run_until(
+                     &mut tui,
+@@ -1105,8 +1111,9 @@ pub async fn run_main(
+         };
+     let mut app_server = Some(app_server_session);
+-    let should_show_trust_screen_flag = remote_project_trust.is_some()
+-        || (!uses_remote_workspace && should_show_trust_screen(&initial_config));
++    let should_show_trust_screen_flag = !dshx_backend()
++        && (remote_project_trust.is_some()
++            || (!uses_remote_workspace && should_show_trust_screen(&initial_config)));
+@@ -1118,7 +1125,8 @@ pub async fn run_main(
+     let (login_status, mut startup_account) = if workload_identity_selected {
+         (LoginStatus::AuthMode(AuthMode::Chatgpt), None)
+-    } else if initial_config.model_provider.requires_openai_auth {
++    } else if !dshx_backend()
++        && initial_config.model_provider.requires_openai_auth {
+         let Some(active_app_server) = app_server.as_mut() else {
+             unreachable!("app server should exist when auth is required");
+         };
+@@ -1144,7 +1152,8 @@ pub async fn run_main(
+         (LoginStatus::NotAuthenticated, None)
+     };
+     let should_show_onboarding =
+-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
++        !dshx_backend()
++            && should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
+ 
+     let config = if should_show_onboarding {
