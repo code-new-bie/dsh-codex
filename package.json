@@ -1,0 +1,21 @@
+{
+  "name": "dsh-codex",
+  "version": "0.0.0-m0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "dshx": "./bin/dshx.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "test:protocol": "node --test test/protocol.test.mjs",
+    "stub": "node ./bin/dshx-stub-server.mjs",
+    "dev": "node ./bin/dshx.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
