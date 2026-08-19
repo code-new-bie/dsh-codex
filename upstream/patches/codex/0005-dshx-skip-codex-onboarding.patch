@@ -61,7 +61,26 @@ diff --git a/codex-rs/tui/src/app/startup.rs b/codex-rs/tui/src/app/startup.rs
      let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
      match provider.runtime_base_url().await {
          Ok(base_url) => base_url,
-@@ -492,7 +495,8 @@ impl App {
+@@ -387,7 +390,10 @@ impl App {
+         chat_widget.note_rendered_width(tui.terminal.last_known_screen_size.width);
+         chat_widget.remote_connection = remote_connection;
+         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
+-        chat_widget
+-            .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
++        chat_widget.maybe_prompt_windows_sandbox_enable(
++            should_prompt_windows_sandbox_nux_at_startup && !crate::dshx_backend(),
++        );
+@@ -402,7 +408,11 @@ impl App {
+             )
+         })?;
+         #[cfg(not(debug_assertions))]
+-        let upgrade_version = crate::updates::get_upgrade_version(&config);
++        let upgrade_version = if crate::dshx_backend() {
++            None
++        } else {
++            crate::updates::get_upgrade_version(&config)
++        };
+@@ -492,7 +502,8 @@ impl App {
          #[cfg(target_os = "windows")]
          {
              let startup_permission_profile = app.config.permissions.effective_permission_profile();
