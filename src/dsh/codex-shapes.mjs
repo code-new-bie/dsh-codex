@@ -55,6 +55,12 @@ function turnError(reason) {
   };
 }
 
+function compactionError(message) {
+  return message == null
+    ? null
+    : { message: String(message), codexErrorInfo: null, additionalDetails: null };
+}
+
 function normalizeList(value) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.entries)) return value.entries;
@@ -74,6 +80,19 @@ function inputFromDshMessage(message) {
     }
   }
   return content;
+}
+
+function historyTurn(id, startedAt) {
+  return {
+    id,
+    items: [],
+    itemsView: 'full',
+    status: 'inProgress',
+    error: null,
+    startedAt,
+    completedAt: null,
+    durationMs: null
+  };
 }
 
 export function encodeDshModel(selection) {
@@ -189,13 +208,17 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
 }
 
 /**
- * Replay the authoritative DSH Session log into the stable Codex transcript
- * subset DSHX currently claims. Runtime semantics remain entirely in DSH.
+ * Replay the authoritative DSH raw log as a human transcript. This intentionally
+ * does not fold the model surface: DSH's own terminal/web transcript contract
+ * keeps messages shadowed by compaction visible to the human and inserts a
+ * compaction marker at the landed checkpoint. The plugin-sourced replacement
+ * user/message is therefore ignored as model-only framing.
  */
 export function dshTurnsFromSession({ ctx, agent, diagnostics = () => {} }) {
   const session = agent?.session;
   if (!session) return [];
   const turns = new Map();
+  const compactions = new Map();
   let currentTurn;
   const toolPresenter = new DshToolPresentationResolver({
     ctx: agent.ctx ?? ctx,
@@ -211,16 +234,7 @@ export function dshTurnsFromSession({ ctx, agent, diagnostics = () => {} }) {
         const number = event.data?.turn;
         if (!Number.isInteger(number)) break;
         const startedAt = seconds(event.time);
-        turns.set(number, {
-          id: `dsh-turn-${number}`,
-          items: [],
-          itemsView: 'full',
-          status: 'inProgress',
-          error: null,
-          startedAt,
-          completedAt: null,
-          durationMs: null
-        });
+        turns.set(number, historyTurn(`dsh-turn-${number}`, startedAt));
         currentTurn = number;
         break;
       }
@@ -284,6 +298,59 @@ export function dshTurnsFromSession({ ctx, agent, diagnostics = () => {} }) {
             turn.items[index] = completed.item;
             break;
           }
+        }
+        break;
+      }
+      case 'compaction/start': {
+        const { compactionId, turn } = event.data ?? {};
+        if (typeof compactionId !== 'string' || compactionId.length === 0) break;
+        let turnKey;
+        let target;
+        let manual = false;
+        if (Number.isInteger(turn)) {
+          turnKey = turn;
+          target = turns.get(turnKey);
+          if (!target) break;
+        } else if (turn === null) {
+          manual = true;
+          turnKey = `compact:${compactionId}`;
+          target = historyTurn(`dsh-maintenance-compaction-${compactionId}`, seconds(event.time));
+          turns.set(turnKey, target);
+        } else {
+          break;
+        }
+        compactions.set(compactionId, {
+          turnKey,
+          turn: target,
+          manual,
+          summarized: false,
+          itemId: `dsh-compaction-${compactionId}`
+        });
+        break;
+      }
+      case 'compaction/summary': {
+        const state = compactions.get(event.data?.compactionId);
+        if (!state) break;
+        state.summarized = true;
+        state.turn.items.push({ type: 'contextCompaction', id: state.itemId });
+        break;
+      }
+      case 'compaction/end': {
+        const state = compactions.get(event.data?.compactionId);
+        if (!state) break;
+        compactions.delete(event.data.compactionId);
+        if (state.manual) {
+          if (!state.summarized) {
+            turns.delete(state.turnKey);
+            break;
+          }
+          const completedAt = seconds(event.time);
+          state.turn.status = event.data?.error == null ? 'completed' : 'failed';
+          state.turn.error = compactionError(event.data?.error);
+          state.turn.completedAt = completedAt;
+          state.turn.durationMs = state.turn.startedAt == null
+            ? null
+            : Math.max(0, (completedAt - state.turn.startedAt) * 1000);
         }
         break;
       }
