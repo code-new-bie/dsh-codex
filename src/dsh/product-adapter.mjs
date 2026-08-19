@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DshAppServerAdapter } from './app-server-adapter.mjs';
 import { dshThreadItemsPage, dshThreadTurnsPage } from './history-pages.mjs';
+import { dshForkSeed } from './session-fork.mjs';
 import { dshSkillsListEntry } from './skills.mjs';
 import { persistedTokenUsageNotification } from './token-usage.mjs';
 
@@ -56,6 +58,8 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         return this.accountUsageRead(params);
       case 'skills/list':
         return this.skillsList(params);
+      case 'thread/fork':
+        return this.threadFork(params);
       case 'thread/turns/list':
         return this.threadTurnsList(params);
       case 'thread/items/list':
@@ -170,6 +174,54 @@ export class DshxProductAdapter extends DshAppServerAdapter {
       result,
       afterResponse: replay ? () => this.send(replay) : undefined
     };
+  }
+
+  async threadFork(params = {}) {
+    const sourceId = String(params.threadId ?? '');
+    if (!sourceId) throw new Error('thread/fork requires threadId');
+    if (params.path != null) throw new Error('DSHX forks DSH sessions by threadId, not Codex rollout paths');
+    if (params.deferGoalContinuation === true) {
+      throw new Error('DSH has no Codex thread-goal continuation state for DSHX to defer');
+    }
+    if (params.ephemeral === true) {
+      throw new Error('DSHX does not expose ephemeral Codex forks over durable DSH sessions');
+    }
+
+    let temporarySourceHandle;
+    let sourceAgent = this.controllers.get(sourceId)?.agent ?? this.driver.getLive(sourceId);
+    if (!sourceAgent) {
+      temporarySourceHandle = await this.driver.resume(sourceId);
+      sourceAgent = temporarySourceHandle.agent;
+    }
+
+    let forkHandle;
+    try {
+      const seed = dshForkSeed(sourceAgent.session.events ?? [], {
+        lastTurnId: params.lastTurnId,
+        beforeTurnId: params.beforeTurnId
+      });
+      const sourcePermission = this.permissions.current(sourceAgent);
+      forkHandle = await this.driver.fork(sourceAgent, {
+        sessionId: randomUUID(),
+        seed
+      });
+      this.permissions.set(forkHandle.agent, sourcePermission.preset);
+      const controller = this.installController(forkHandle);
+      const result = this.threadResponse(controller.agent, {
+        includeTurns: params.excludeTurns !== true
+      });
+      return {
+        result,
+        afterResponse: () => this.send({ method: 'thread/started', params: { thread: result.thread } })
+      };
+    } catch (error) {
+      if (forkHandle && !this.controllers.has(String(forkHandle.agent.id))) {
+        await forkHandle.dispose?.();
+      }
+      throw error;
+    } finally {
+      await temporarySourceHandle?.dispose?.();
+    }
   }
 
   historyController(threadId) {
