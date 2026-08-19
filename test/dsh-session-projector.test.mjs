@@ -55,7 +55,7 @@ test('does not guess Codex reasoning semantics before they are explicitly mapped
   assert.deepEqual(output, []);
 });
 
-test('projects unknown DSH tools conservatively as generic dynamic tool calls', () => {
+test('projects unknown DSH tools conservatively and correlates official tool/result message source', () => {
   const projector = new DshSessionProjector({ threadId: 'session-1' });
   start(projector);
   const started = projector.project(
@@ -70,12 +70,46 @@ test('projects unknown DSH tools conservatively as generic dynamic tool calls', 
     event('tool/result', {
       turn: 1,
       step: 1,
-      callId: 'call-1',
-      message: { content: [{ type: 'text', text: 'ok' }] }
+      message: {
+        source: { kind: 'tool', callId: 'call-1' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-1',
+          content: [{ type: 'text', text: 'ok' }],
+          isError: false
+        }]
+      }
     }, 1_700_000_000_050)
   );
+  assert.equal(completed.length, 1);
   assert.equal(completed[0].params.item.status, 'completed');
   assert.equal(completed[0].params.item.success, true);
+});
+
+test('falls back to tool-result block call id when message source is unavailable', () => {
+  const projector = new DshSessionProjector({ threadId: 'session-1' });
+  start(projector);
+  projector.project(event('tool/call', {
+    turn: 1,
+    step: 1,
+    callId: 'call-2',
+    name: 'custom_tool',
+    arguments: '{}'
+  }));
+  const completed = projector.project(event('tool/result', {
+    turn: 1,
+    step: 1,
+    message: {
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'call-2',
+        content: [{ type: 'text', text: 'failed' }],
+        isError: true
+      }]
+    }
+  }));
+  assert.equal(completed[0].params.item.status, 'failed');
+  assert.equal(completed[0].params.item.success, false);
 });
 
 test('projects DSH todo snapshots into Codex plan updates', () => {
