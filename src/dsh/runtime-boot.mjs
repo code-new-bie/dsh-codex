@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +9,8 @@ import {
   loadLayeredEnv,
   loadOptionalPatches,
   loadProfile,
-  PROFILE_PATCH_FILENAME
+  PROFILE_PATCH_FILENAME,
+  watchUserPatches
 } from '@deepseek-ai/dsh-app-boot';
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment';
 
@@ -27,8 +28,6 @@ const DSHX_SURFACE_PATCHES = [
 ];
 
 function installationAnchor() {
-  // @deepseek-ai/dsh is the published profile owner and carries the official
-  // dependency closure. No exports restriction blocks package.json resolution.
   return createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json');
 }
 
@@ -41,8 +40,11 @@ function selectedProfile(explicit) {
 }
 
 function profileHome(profile) {
-  // <DSH_HOME>/profiles/<name> -> <DSH_HOME>
   return dirname(dirname(profile.dir));
+}
+
+function homePatchPath(profile) {
+  return join(profileHome(profile), PROFILE_PATCH_FILENAME);
 }
 
 function shippedAgentPresetPatch(entries, installAnchor) {
@@ -52,8 +54,6 @@ function shippedAgentPresetPatch(entries, installAnchor) {
     id: 'agent-presets',
     config: {
       ...(agentPresets.config ?? {}),
-      // This is the same installation-owned preset root used by the official
-      // dsh profile launcher. User/writable roots remain owned by the roster.
       roots: [{ path: join(dirname(installAnchor), 'config', 'agent-presets'), trust: 'system' }]
     }
   }];
@@ -83,22 +83,17 @@ export function dshxRuntimeProfile({
   healProfilesModuleFallback(installAnchor, home);
   const profile = loadProfile(DSH_PROFILE_BIN_NAME, profileName, installAnchor, home);
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME);
-  // Loader requires a real root anchored in the profile directory so
-  // profile-local plugins resolve exactly as they do under `dsh --profile`.
   writeFileSync(rootConfig, PROFILE_ROOT_CONFIG);
 
   const bundlePatches = profile.layers.flatMap((layer) => layer.patches);
-  const homePatches = loadOptionalPatches(
-    DSH_PROFILE_BIN_NAME,
-    join(profileHome(profile), PROFILE_PATCH_FILENAME)
-  ) ?? [];
+  const homePatches = loadOptionalPatches(DSH_PROFILE_BIN_NAME, homePatchPath(profile)) ?? [];
   const beforeLauncher = composeEntries([[...bundlePatches, ...profile.patches, ...homePatches]]);
   const launcherPatches = [
     ...shippedAgentPresetPatch(beforeLauncher, installAnchor),
     ...telemetryPatch(beforeLauncher),
     ...structuredClone(overlays),
-    // Last on purpose: a profile may customize DSH capabilities, but it cannot
-    // re-enable a competing presentation runner inside the DSHX process.
+    // Last on purpose: DSH user/profile configuration owns capabilities, but
+    // cannot re-enable a competing presentation runner in the DSHX process.
     ...structuredClone(DSHX_SURFACE_PATCHES)
   ];
 
@@ -107,6 +102,7 @@ export function dshxRuntimeProfile({
     profile,
     rootConfig,
     installAnchor,
+    homePatchPath: homePatchPath(profile),
     patches: [
       ...structuredClone(bundlePatches),
       ...structuredClone(profile.patches),
@@ -116,39 +112,65 @@ export function dshxRuntimeProfile({
   };
 }
 
-/** Exact patch list DSHX boots; exposed for doctor/ownership tests only. */
 export function dshxRuntimePatches(options = {}) {
   return dshxRuntimeProfile(options).patches;
 }
 
-/** Offline composition view used by doctor/CI; it includes the user's selected DSH profile. */
 export function dshxRuntimeEntries(options = {}) {
   return composeEntries([dshxRuntimePatches(options)]);
 }
 
+async function installProfileWatchers(ctx, options) {
+  if (ctx.get('loader') == null) {
+    throw new Error('dshx: official DSH profile boot has no Loader for profile hot reload');
+  }
+  if (ctx.get('hmr') == null) {
+    if (ctx.get('timer') == null) {
+      await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-timer' });
+    }
+    await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr', config: { root: [] } });
+  }
+
+  const current = () => dshxRuntimeProfile(options).patches;
+  const composition = dshxRuntimeProfile(options);
+  await watchUserPatches(ctx, {
+    binName: NAME,
+    filename: composition.profile.patchPath,
+    compose: () => current()
+  });
+  await watchUserPatches(ctx, {
+    binName: NAME,
+    filename: composition.homePatchPath,
+    compose: () => current()
+  });
+}
+
 /**
  * Boot the selected official Harness profile in-process and return its root Context.
- * DSHX owns only the surrounding presentation lifetime. Environment discovery
- * intentionally uses the official `dsh` namespace so project and DSH-home .env
- * behavior stays identical to ordinary Harness launches.
+ * DSHX owns only presentation lifetime. Project and DSH-home environment and
+ * live patch behavior intentionally follow the official DSH profile launcher.
  */
 export async function bootDshxRuntime({
   cwd = process.cwd(),
   profile,
   environment = loadLayeredEnv(DSH_PROFILE_BIN_NAME, cwd),
   overlays = [],
-  home
+  home,
+  watch = true
 } = {}) {
-  const composition = dshxRuntimeProfile({ profile, overlays, home });
-  return boot(
+  const options = { profile, overlays, home };
+  const composition = dshxRuntimeProfile(options);
+  const ctx = await boot(
     NAME,
     composition.rootConfig,
     structuredClone(composition.patches),
-    (ctx) => {
-      ctx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment);
+    (hostCtx) => {
+      hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment);
     },
     pathToFileURL(composition.installAnchor).href
   );
+  if (watch) await installProfileWatchers(ctx, options);
+  return ctx;
 }
 
 export const runtimeInternals = {
@@ -160,5 +182,7 @@ export const runtimeInternals = {
   DSHX_SURFACE_PATCHES,
   installationAnchor,
   selectedProfile,
-  profileHome
+  profileHome,
+  homePatchPath,
+  installProfileWatchers
 };
