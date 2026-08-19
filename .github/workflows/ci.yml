@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   protocol:
-    name: Protocol / Node ${{ matrix.node }}
+    name: Protocol / ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,7 +26,56 @@ jobs:
       - run: npm test
       - run: node --check src/protocol.mjs
       - run: node --check src/server.mjs
+      - run: node --check src/dsh/app-server-adapter.mjs
+      - run: node --check src/dsh/product-adapter.mjs
+      - run: node --check src/dsh/local-server.mjs
+      - run: node --check src/dsh/runtime-boot.mjs
       - run: node --check bin/dshx.mjs
+
+  codex-tui:
+    name: Pinned Codex TUI / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize pinned Codex (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/materialize-codex.sh
+      - name: Materialize pinned Codex (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/materialize-codex.ps1
+      - name: Assert no Codex-core fallback (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          grep -q 'DSHX_APP_SERVER_ENDPOINT is required' .upstream/codex/codex-rs/tui/src/main.rs
+          grep -q 'DSHX_APP_SERVER_TOKEN is required' .upstream/codex/codex-rs/tui/src/main.rs
+          grep -q 'Some(dshx_endpoint)' .upstream/codex/codex-rs/tui/src/main.rs
+          grep -q 'DSHX_RESUME_MODE' .upstream/codex/codex-rs/tui/src/main.rs
+      - name: Assert no Codex-core fallback (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $source = Get-Content .upstream/codex/codex-rs/tui/src/main.rs -Raw
+          if (-not $source.Contains('DSHX_APP_SERVER_ENDPOINT is required')) { throw 'missing DSHX endpoint guard' }
+          if (-not $source.Contains('DSHX_APP_SERVER_TOKEN is required')) { throw 'missing DSHX token guard' }
+          if (-not $source.Contains('Some(dshx_endpoint)')) { throw 'Codex core fallback was not removed' }
+          if (-not $source.Contains('DSHX_RESUME_MODE')) { throw 'DSHX resume patch is missing' }
+      - name: Cargo check pinned TUI
+        shell: bash
+        if: runner.os != 'Windows'
+        run: CARGO_TARGET_DIR="$GITHUB_WORKSPACE/.build/codex" cargo check --manifest-path .upstream/codex/codex-rs/Cargo.toml --locked -p codex-tui --bin codex-tui
+      - name: Cargo check pinned TUI (Windows)
+        shell: pwsh
+        if: runner.os == 'Windows'
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path $env:GITHUB_WORKSPACE '.build\codex'
+          cargo check --manifest-path .upstream\codex\codex-rs\Cargo.toml --locked -p codex-tui --bin codex-tui
 
   ownership-guard:
     name: Ownership boundary
@@ -38,3 +87,9 @@ jobs:
         run: |
           grep -q "must not grow into an agent framework" docs/ARCHITECTURE.md
           grep -q "DeepSeek Harness remains an upstream dependency" docs/TEAM.md
+      - name: Assert production runtime remains official DSH composition
+        shell: bash
+        run: |
+          grep -q "dsh-base" src/dsh/runtime-boot.mjs
+          grep -q "dsh-headless" src/dsh/runtime-boot.mjs
+          grep -q "startup: { disabled: true }" src/dsh/runtime-boot.mjs
