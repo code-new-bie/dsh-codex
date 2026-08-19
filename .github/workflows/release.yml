@@ -10,13 +10,21 @@ permissions:
 
 jobs:
   build:
-    name: Build / ${{ matrix.os }}
+    name: Build / ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13]
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: windows-latest
+            label: windows-x64
+          - os: macos-26
+            label: macos-arm64
+          - os: macos-26-intel
+            label: macos-x64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,6 +41,7 @@ jobs:
       - name: Test presentation adapter
         run: |
           npm install
+          node scripts/verify-dsh-closure.mjs
           npm test
       - name: Build pinned TUI and package (Unix)
         if: runner.os != 'Windows'
@@ -61,6 +70,7 @@ jobs:
         shell: pwsh
         run: |
           $tgz = Get-ChildItem dist\release\dshx-*.tgz | Select-Object -First 1
+          if (-not $tgz) { throw 'platform tarball missing' }
           $prefix = Join-Path $env:RUNNER_TEMP 'dshx-release-smoke'
           npm install --global --prefix $prefix $tgz.FullName
           $version = & (Join-Path $prefix 'dshx.cmd') --version
@@ -68,7 +78,7 @@ jobs:
           & (Join-Path $prefix 'dshx.cmd') doctor
       - uses: actions/upload-artifact@v4
         with:
-          name: dshx-${{ runner.os }}-${{ runner.arch }}
+          name: dshx-${{ matrix.label }}
           path: |
             dist/release/*.tgz
             dist/release/*.json
