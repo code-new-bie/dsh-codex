@@ -4,7 +4,7 @@ DSHX is a production-oriented terminal frontend for **official DeepSeek Harness*
 
 ## Product goal
 
-From any code project, the normal production entry point must be:
+From any code project, the normal production entry point is:
 
 ```bash
 dshx
@@ -28,7 +28,7 @@ If DSH does not expose a capability, DSHX waits for upstream or degrades/hides t
 ```text
 Codex TUI thin fork             ← dsh-codex owns presentation
         │
-        │ app-server-compatible projection
+        │ private JSONL stdio child process
         ▼
 thin DSH UI adapter             ← dsh-codex owns translation only
         │
@@ -38,6 +38,12 @@ thin DSH UI adapter             ← dsh-codex owns translation only
 Official DeepSeek Harness       ← upstream owns capabilities/runtime
 ```
 
+## Production transport
+
+`dshx` launches the packaged Codex TUI and points it at a private DSHX adapter child process. The TUI and adapter exchange app-server-compatible JSON-RPC messages as newline-delimited JSON over the child's stdin/stdout.
+
+Normal production startup does **not** open a loopback TCP port, does not require a bearer token, does not invoke `codex --remote`, and does not depend on Codex's experimental WebSocket remote mode. Legacy WebSocket protocol fixtures may remain in the source tree for development compatibility tests, but they are excluded from the installable release closure.
+
 ## Product principles
 
 1. **Reuse Codex UI instead of imitating it.** Keep upstream rendering/input code as intact as practical.
@@ -45,15 +51,15 @@ Official DeepSeek Harness       ← upstream owns capabilities/runtime
 3. **Adapter, not framework.** Protocol translation is allowed; reimplementation of DSH capabilities is not.
 4. **Fail closed.** Permission/approval semantics that cannot be represented faithfully must never be silently weakened.
 5. **`dshx` is the product command.** Production users do not manually run Codex remote mode, bridge processes or DSH profile plumbing.
-6. **Windows is first-class.** Windows Terminal/PowerShell and Chinese IME are release gates, not follow-up polish.
+6. **Windows is first-class.** Windows Terminal/PowerShell and CJK behavior are release gates, not follow-up polish.
 
 ## Current status
 
-`main` contains the architecture baseline. Active M0 work is on `work/protocol-poc`.
+The active production convergence line is `work/production-1.0` (Draft PR #10), stacked on the latest official-DSH adapter work.
 
-M0 intentionally uses Codex remote/app-server transport only as a development harness to prove the UI/protocol seam. It is **not** the production transport. The production target is a pinned Codex TUI thin fork packaged behind `dshx`.
+Implemented product surfaces include the zero-argument launcher, pinned Codex TUI packaging, DSH session/turn/message projection, resume, permission and approval presentation, shell/tool/diff projection, plan state, DSH-owned fork/compaction delegation, diagnostics, three-platform packaging workflows, Linux PTY smoke and Windows ConPTY smoke. The real TUI smokes exercise the private stdio transport and include CJK input plus terminal resize.
 
-The earlier custom `pi-tui` implementation is a legacy prototype and is not the target product.
+The branch remains a release candidate until its full CI/release gates and the remaining manual UX parity checks are green. In particular, DSHX does not call itself 1.0 merely because the screens render; daily coding loop, security semantics, installable artifacts and terminal behavior must all pass.
 
 See:
 
@@ -64,20 +70,21 @@ See:
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - [`SECURITY.md`](SECURITY.md)
 
-## M0 development launcher
-
-On the protocol-PoC branch, after installing dependencies and the pinned development Codex CLI:
+## Source checkout
 
 ```bash
 npm install
-npm link
 
-dshx doctor
-dshx
+# Build the pinned, patched Codex TUI.
+./scripts/build-codex-tui.sh      # Linux/macOS
+# .\scripts\build-codex-tui.ps1 # Windows PowerShell
+
+node ./bin/dshx.mjs doctor
+node ./bin/dshx.mjs
 ```
 
-This development launcher starts a deterministic compatibility stub and attaches the Codex TUI to it. The next milestone replaces the stub with a thin adapter over official DSH public APIs.
+Packaged releases include the TUI binary; users do not separately install Codex for normal use.
 
 ## License
 
-Apache-2.0 for project-owned code. Vendored/synchronized upstream code keeps its applicable upstream notices and license requirements.
+Apache-2.0 for project-owned code. Synchronized upstream code keeps its applicable upstream notices and license requirements.
