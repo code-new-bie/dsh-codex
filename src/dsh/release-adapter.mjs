@@ -1,5 +1,6 @@
 import { DshxProductAdapter } from './product-adapter.mjs';
 import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
+import { DshUserShellBridge } from './user-shell.mjs';
 
 function snapshotTitle(snapshot) {
   return typeof snapshot?.title === 'string' && snapshot.title.length > 0 ? snapshot.title : null;
@@ -10,9 +11,28 @@ function snapshotTitle(snapshot) {
  * extensions here so the core DSH public adapter remains stable and auditable.
  */
 export class DshxReleaseAdapter extends DshxProductAdapter {
+  userShell() {
+    return this._userShell ??= new DshUserShellBridge({
+      send: this.send,
+      diagnostics: this.diagnostics
+    });
+  }
+
   async dispatch(method, params) {
-    if (method === 'thread/name/set') return this.threadNameSet(params);
-    return super.dispatch(method, params);
+    switch (method) {
+      case 'thread/name/set':
+        return this.threadNameSet(params);
+      case 'thread/shellCommand':
+        return this.threadShellCommand(params);
+      case 'turn/interrupt':
+        if (this.userShell().interrupt(params?.threadId, params?.turnId)) return { result: {} };
+        return super.dispatch(method, params);
+      case 'thread/unsubscribe':
+        this.userShell().abortThread(params?.threadId, 'thread unsubscribed');
+        return super.dispatch(method, params);
+      default:
+        return super.dispatch(method, params);
+    }
   }
 
   threadResponse(agent, options = {}) {
@@ -56,6 +76,13 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     }
   }
 
+  threadShellCommand(params = {}) {
+    const threadId = String(params.threadId ?? '');
+    const controller = this.controllers.get(threadId);
+    if (!controller) throw new Error(`Thread is not resumed in DSHX: ${threadId}`);
+    return this.userShell().start(controller, params.command);
+  }
+
   async threadNameSet(params = {}) {
     const threadId = String(params.threadId ?? '');
     if (!threadId) throw new Error('thread/name/set requires threadId');
@@ -79,6 +106,11 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     } finally {
       await temporaryHandle?.dispose?.();
     }
+  }
+
+  async close() {
+    this._userShell?.close();
+    await super.close();
   }
 }
 
