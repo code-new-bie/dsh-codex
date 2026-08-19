@@ -16,8 +16,9 @@ No item becomes green because code for the check exists. A release candidate is 
 | DSH ownership boundary | adapter/unit tests + CI ownership assertions | pass |
 | Approval/permission fail-closed | approval/permission/subagent authority tests | pass |
 | Session resume/durability projection | DSH `agents.resume`, persistence projection and resume tests; persisted model/header wins over machine default | pass |
-| Local production transport | no production `WebSocketServer`; TUI rejects TCP WebSocket endpoint | pass |
-| Cross-platform local IPC data plane | `dshx-ipc-bridge --check` performs real UDS + WebSocket ping/pong | pass on Linux/Windows/macOS |
+| Local production transport | no production TCP listener; pinned TUI rejects TCP WebSocket endpoint | pass |
+| Cross-platform local IPC data plane | `dshx-ipc-bridge --check` performs real private UDS + WebSocket-framing ping/pong | pass on Linux/Windows/macOS |
+| Visible slash-command contract | `scripts/verify-slash-contract.mjs` classifies every pinned Codex command and asserts DSH-backed methods for every runtime-owned command left visible in DSHX | pass |
 | Real pinned TUI / Linux | PTY smoke drives pinned TUI through local IPC deterministic adapter | pass |
 | Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology | pass |
 | Automated CJK transport/render sanity | Windows ConPTY test submits and observes a Chinese prompt | pass |
@@ -48,7 +49,7 @@ Any difference is either fixed, documented as a deliberate product difference in
 
 ## Promotion procedure
 
-1. Freeze the candidate commit and ensure the supported Codex/DSH pins are unchanged during validation.
+1. Freeze the candidate commit on `release/1.0-rc` and ensure the supported Codex/DSH pins are unchanged during validation.
 2. Run the full CI workflow and the dedicated Windows ConPTY workflow for that exact commit.
 3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass.
 4. Install the generated Windows release artifact for the manual Windows Terminal/CJK/IME side-by-side acceptance run; do not validate a source checkout instead.
@@ -58,4 +59,6 @@ Any difference is either fixed, documented as a deliberate product difference in
 
 ## Current integration note
 
-`agent/production-ipc` / Draft PR #8 is the production-transport integration branch. The repository contains the automated gates above, but their existence is **not** a statement that a particular candidate has passed GitHub Actions. Consult the Actions/check status for the exact head before merging or tagging.
+`release/1.0-rc` is the sole release-candidate integration branch. It is based on the production local-IPC implementation from `agent/production-ipc`; the alternative direct-stdio Codex-client experiment is intentionally excluded because it requires a much larger upstream TUI/client patch and would increase DSHX maintenance ownership.
+
+Older stacked draft PRs remain historical engineering workstreams only. They are not release evidence. The exact `release/1.0-rc` head and its eventual `v1.0.0-rc.N` tag are the only commits whose CI/manual evidence may be used to promote 1.0.
