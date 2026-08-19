@@ -31,3 +31,16 @@ diff --git a/codex-rs/tui/src/app_server_session.rs b/codex-rs/tui/src/app_serve
      if model_settings == ResumeModelSettings::PreserveExistingThread {
          return ThreadResumeParams {
              thread_id: thread_id.to_string(),
+@@ -1755,6 +1773,12 @@ fn thread_fork_params_from_config(
+     thread_params_mode: ThreadParamsMode,
+     remote_cwd_override: Option<&std::path::Path>,
+ ) -> ThreadForkParams {
++    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++        return ThreadForkParams {
++            thread_id: thread_id.to_string(),
++            ..ThreadForkParams::default()
++        };
++    }
+     let permissions = permissions_selection_from_config(&config, thread_params_mode);
+     let sandbox = permissions
+         .is_none()
