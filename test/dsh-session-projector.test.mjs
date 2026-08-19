@@ -39,20 +39,57 @@ test('projects visible DSH text chunks into one Codex agent message item', () =>
     event('assistant/message', {
       turn: 1,
       step: 1,
-      message: { content: [{ type: 'text', text: 'hello' }, { type: 'reasoning', text: 'private-ish presentation' }] }
+      message: { content: [{ type: 'text', text: 'hello' }] }
     })
   );
   assert.equal(completed[0].method, 'item/completed');
   assert.equal(completed[0].params.item.text, 'hello');
 });
 
-test('does not guess Codex reasoning semantics before they are explicitly mapped', () => {
+test('projects DSH reasoning chunks into a distinct native Codex reasoning item', () => {
   const projector = new DshSessionProjector({ threadId: 'session-1' });
   start(projector);
-  const output = projector.project(
-    event('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'thinking' } })
+
+  const first = projector.project(
+    event('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'think' } })
   );
-  assert.deepEqual(output, []);
+  assert.deepEqual(first.map((entry) => entry.method), ['item/started', 'item/reasoning/textDelta']);
+  assert.deepEqual(first[0].params.item, {
+    type: 'reasoning',
+    id: 'dsh-reasoning-1-1',
+    summary: [],
+    content: []
+  });
+  assert.equal(first[1].params.contentIndex, 0);
+  assert.equal(first[1].params.delta, 'think');
+
+  const second = projector.project(
+    event('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'ing' } })
+  );
+  assert.deepEqual(second.map((entry) => entry.method), ['item/reasoning/textDelta']);
+
+  const completed = projector.project(event('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: {
+      content: [
+        { type: 'reasoning', text: 'thinking' },
+        { type: 'text', text: 'answer' }
+      ]
+    }
+  }));
+  assert.deepEqual(completed.map((entry) => entry.method), [
+    'item/completed',
+    'item/started',
+    'item/completed'
+  ]);
+  assert.deepEqual(completed[0].params.item, {
+    type: 'reasoning',
+    id: 'dsh-reasoning-1-1',
+    summary: [],
+    content: ['thinking']
+  });
+  assert.equal(completed[2].params.item.text, 'answer');
 });
 
 test('projects unknown DSH tools conservatively and correlates official tool/result message source', () => {
