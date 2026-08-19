@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 import { ProtocolStub, normalizeDispatchResult } from '../src/protocol.mjs';
 
@@ -6,20 +7,23 @@ function request(stub, id, method, params = {}) {
   return normalizeDispatchResult(stub, { id, method, params });
 }
 
+const workspace = path.resolve('tmp', 'workspace');
+const dshxHome = path.resolve('tmp', 'dshx-home');
+
 test('initialize matches Codex remote handshake fields', () => {
-  const stub = new ProtocolStub({ cwd: '/tmp/workspace', home: '/tmp/dshx-home' });
+  const stub = new ProtocolStub({ cwd: workspace, home: dshxHome });
   const { response } = request(stub, 'initialize', 'initialize', {
     clientInfo: { name: 'codex-tui', version: 'test' }
   });
   assert.equal(response.id, 'initialize');
-  assert.equal(response.result.codexHome, '/tmp/dshx-home');
+  assert.equal(response.result.codexHome, dshxHome);
   assert.match(response.result.userAgent, /^dsh-codex-app-server\//);
   assert.equal(typeof response.result.platformFamily, 'string');
   assert.equal(typeof response.result.platformOs, 'string');
 });
 
 test('bootstrap methods return auth-free model catalog', () => {
-  const stub = new ProtocolStub({ cwd: '/tmp/workspace' });
+  const stub = new ProtocolStub({ cwd: workspace });
   assert.deepEqual(request(stub, 1, 'account/read').response.result, {
     account: null,
     requiresOpenaiAuth: false
@@ -34,18 +38,20 @@ test('bootstrap methods return auth-free model catalog', () => {
 });
 
 test('thread start emits thread/started and uses DSH-like provider identity', () => {
-  const stub = new ProtocolStub({ cwd: '/tmp/workspace' });
-  const { response, events } = request(stub, 4, 'thread/start', { cwd: '/tmp/workspace' });
+  const stub = new ProtocolStub({ cwd: workspace });
+  const { response, events } = request(stub, 4, 'thread/start', { cwd: workspace });
   assert.equal(response.result.modelProvider, 'dsh');
   assert.equal(response.result.thread.modelProvider, 'dsh');
   assert.equal(response.result.thread.status.type, 'idle');
+  assert.equal(response.result.cwd, workspace);
+  assert.equal(response.result.thread.cwd, workspace);
   assert.equal(events[0].method, 'thread/started');
   assert.equal(events[0].params.thread.id, response.result.thread.id);
 });
 
 test('turn start emits the minimal Codex streaming lifecycle', () => {
-  const stub = new ProtocolStub({ cwd: '/tmp/workspace' });
-  const thread = request(stub, 4, 'thread/start', { cwd: '/tmp/workspace' }).response.result.thread;
+  const stub = new ProtocolStub({ cwd: workspace });
+  const thread = request(stub, 4, 'thread/start', { cwd: workspace }).response.result.thread;
   const { response, events } = request(stub, 5, 'turn/start', {
     threadId: thread.id,
     input: [{ type: 'text', text: 'hello dshx', text_elements: [] }]
@@ -60,8 +66,8 @@ test('turn start emits the minimal Codex streaming lifecycle', () => {
 });
 
 test('interrupt emits an interrupted turn completion', () => {
-  const stub = new ProtocolStub({ cwd: '/tmp/workspace' });
-  const thread = request(stub, 10, 'thread/start', { cwd: '/tmp/workspace' }).response.result.thread;
+  const stub = new ProtocolStub({ cwd: workspace });
+  const thread = request(stub, 10, 'thread/start', { cwd: workspace }).response.result.thread;
   const started = request(stub, 11, 'turn/start', {
     threadId: thread.id,
     input: [{ type: 'text', text: 'long task', text_elements: [] }]
