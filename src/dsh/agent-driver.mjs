@@ -121,6 +121,22 @@ export class DshAgentDriver {
     return this.selectionFor(agent).current;
   }
 
+  currentTitle(agent) {
+    return this.ctx.get('sessionTitle')?.get?.(agent.session);
+  }
+
+  renameTitle(agent, title) {
+    const service = requireService(this.ctx, 'sessionTitle');
+    return service.rename(agent.session, title);
+  }
+
+  async readTitle(sessionId) {
+    const query = this.ctx.get('sessionQuery');
+    if (query?.readTitle) return query.readTitle(SessionId(sessionId));
+    const live = this.getLive(sessionId);
+    return live ? this.currentTitle(live) : undefined;
+  }
+
   async selectModel(agent, requested) {
     const llm = requireService(this.ctx, 'llm');
     const resolved = await llm.resolveCallConfig({
