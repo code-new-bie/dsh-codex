@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm install
+      - name: Verify exact DeepSeek Harness release closure
+        run: node scripts/verify-dsh-closure.mjs
       - run: npm test
       - name: Syntax check all shipped JavaScript (Unix)
         if: runner.os != 'Windows'
@@ -56,6 +58,8 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      - name: Verify exact DeepSeek Harness release closure
+        run: node scripts/verify-dsh-closure.mjs
       - name: Boot and dispose official DeepSeek Harness composition
         run: node scripts/runtime-smoke.mjs
 
@@ -154,6 +158,7 @@ jobs:
         shell: bash
         run: |
           npm install
+          node scripts/verify-dsh-closure.mjs
           python3 -m pip install --user pexpect
           python3 test/tui_smoke.py
       - name: Build installable platform tarball
