@@ -48,18 +48,23 @@ There is **no TCP listener in the production launch path**. The bridge reuses Co
 
 ## Current integration status
 
-The active production-integration work is stacked on `work/dsh-public-adapter`, with the local-IPC/packaging gate in Draft PR #8 (`agent/production-ipc`). The implementation now includes:
+`release/1.0-rc` is the sole production release-candidate integration branch, reviewed directly against `main` in Draft PR #11. Older M0/M1/thin-launcher/transport PRs are historical workstreams rather than release dependencies.
+
+The selected production transport is the small local-IPC bridge above. The alternative experiment that added a larger direct-stdio transport implementation inside the Codex client is intentionally excluded from the 1.0 line to keep the maintained upstream diff smaller.
+
+The candidate implementation includes:
 
 - zero-argument `dshx` launch and `dshx resume` flows;
-- official DSH runtime composition and exact supported DSH release closure checks;
-- DSH-backed session/history, model, permissions, approvals, ask-user, tools/shell/diffs, plan/reasoning, steering/interrupt, fork/compaction and subagent presentation boundaries;
+- official DSH runtime composition and exact supported DSH rc.8 release-closure checks;
+- DSH-backed session/history, model, permissions, approvals, ask-user, tools/shell/diffs, plan/reasoning, steering/interrupt, rename, fork/compaction, skills and subagent presentation boundaries;
 - pinned Codex TUI build plus packaged cross-platform local IPC bridge;
+- an executable visible-slash-command contract so every runtime-owned command left visible is either DSH-backed or the build fails;
 - release artifacts for Linux x64, Windows x64, macOS arm64 and macOS x64;
-- clean-install `dshx doctor`, including a real local UDS + WebSocket ping/pong data-plane self-check;
-- Linux real-TUI PTY smoke through the production local-IPC topology;
+- clean-install `dshx doctor`, including a real local UDS + WebSocket-framing ping/pong data-plane self-check;
+- Linux real-TUI PTY smoke and Windows real-TUI ConPTY + Chinese-text smoke through the production local-IPC topology;
 - fail-closed ownership/security tests that keep DSH authoritative.
 
-A commit is not called 1.0-ready merely because these paths exist. The final release candidate still must pass the repository CI/release gates and the side-by-side Windows Terminal/CJK/IME acceptance pass described in `docs/UX-PARITY.md`.
+A commit is not called 1.0-ready merely because these paths exist. The exact release candidate must pass the repository CI/release gates and the side-by-side Windows Terminal/CJK/IME acceptance pass described in `docs/RELEASE-READINESS.md` and `docs/UX-PARITY.md`.
 
 ## Build from source
 
@@ -91,7 +96,7 @@ dshx
 
 ## Release model
 
-Tags matching `v*` build platform-specific installable tarballs in GitHub Actions. The release workflow performs adapter/runtime tests, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, and publishes SHA-256 checksums. Release candidates containing `-` in the tag are published as prereleases.
+Tags matching `v*` build platform-specific installable tarballs in GitHub Actions. The release workflow performs adapter/runtime tests, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises the Linux PTY and Windows ConPTY gates where applicable, and publishes SHA-256 checksums. Release candidates containing `-` in the tag are published as prereleases.
 
 ## Design references
 
