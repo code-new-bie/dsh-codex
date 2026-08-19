@@ -12,17 +12,22 @@ const events = [
   { seq: 7, type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } }
 ];
 
-test('full fork reuses the exact durable DSH event prefix', () => {
+test('default fork uses the latest completed DSH turn prefix', () => {
   const seed = dshForkSeed(events);
   assert.deepEqual(seed.map((event) => event.seq), [1, 2, 3, 4, 5, 6, 7]);
   assert.equal(seed[0], events[0]);
   assert.equal(seed.at(-1), events.at(-1));
 });
 
-test('lastTurnId includes the selected completed DSH turn', () => {
+test('lastTurnId includes the selected completed DSH turn and trailing standalone events', () => {
+  const withTitle = [
+    ...events.slice(0, 4),
+    { seq: 4.5, type: 'session/title', data: { title: 'after turn one' } },
+    ...events.slice(4)
+  ];
   assert.deepEqual(
-    dshForkSeed(events, { lastTurnId: 'dsh-turn-1' }).map((event) => event.seq),
-    [1, 2, 3, 4]
+    dshForkSeed(withTitle, { lastTurnId: 'dsh-turn-1' }).map((event) => event.seq),
+    [1, 2, 3, 4, 4.5]
   );
 });
 
@@ -33,7 +38,21 @@ test('beforeTurnId excludes the selected turn and everything after it', () => {
   );
 });
 
-test('fork refuses ambiguous, invalid, missing, or active DSH turn boundaries', () => {
+test('default fork excludes a later active turn instead of copying an open execution prefix', () => {
+  const active = [
+    ...events,
+    { seq: 8, type: 'session/title', data: { title: 'latest completed title' } },
+    { seq: 9, type: 'turn/start', data: { turn: 3 } },
+    { seq: 10, type: 'user/message', data: { id: 'u3' } }
+  ];
+  assert.deepEqual(dshForkSeed(active).map((event) => event.seq), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.throws(
+    () => dshForkSeed(active, { lastTurnId: 'dsh-turn-3' }),
+    /no completed dsh-turn-3/
+  );
+});
+
+test('fork refuses ambiguous, invalid, missing, or completion-less boundaries', () => {
   assert.throws(
     () => dshForkSeed(events, { lastTurnId: 'dsh-turn-1', beforeTurnId: 'dsh-turn-2' }),
     /mutually exclusive/
@@ -41,7 +60,7 @@ test('fork refuses ambiguous, invalid, missing, or active DSH turn boundaries', 
   assert.throws(() => dshForkSeed(events, { lastTurnId: 'turn-1' }), /cannot map Codex turn id/);
   assert.throws(() => dshForkSeed(events, { lastTurnId: 'dsh-turn-99' }), /no completed/);
   assert.throws(
-    () => dshForkSeed([...events, { seq: 8, type: 'turn/start', data: { turn: 3 } }]),
-    /active turn 3/
+    () => dshForkSeed([{ seq: 1, type: 'turn/start', data: { turn: 1 } }]),
+    /no completed turn to fork from/
   );
 });
