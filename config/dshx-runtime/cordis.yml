@@ -1,4 +1,0 @@
-# DSHX does not own a Harness plugin tree. This empty root is populated only
-# by the official @deepseek-ai/dsh-base and @deepseek-ai/dsh-headless bundle
-# patch layers in src/dsh/runtime-boot.mjs.
-[]
