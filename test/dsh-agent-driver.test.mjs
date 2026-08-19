@@ -2,17 +2,29 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DshAgentDriver } from '../src/dsh/agent-driver.mjs';
 
-function fixture() {
+function fixture({ loggedConfig = undefined } = {}) {
   const calls = [];
   const listeners = [];
   const agent = {
     id: 'session-live',
+    session: {
+      requestHeader() {
+        return loggedConfig === undefined ? undefined : { config: loggedConfig };
+      }
+    },
+    ctx: {
+      on(name) {
+        listeners.push(name);
+        return () => {};
+      }
+    },
     followup(message) { calls.push(['followup', message]); },
     steer(message) { calls.push(['steer', message]); },
     cancel(cause, options) { calls.push(['cancel', cause, options]); },
     whenIdle() { calls.push(['whenIdle']); return Promise.resolve(); }
   };
   const handle = { agent, dispose: async () => {} };
+  const agentCtx = { ...agent.ctx, agent };
   const services = {
     loader: { async await() { calls.push(['loader.await']); } },
     agentDefaultModel: {
@@ -24,18 +36,62 @@ function fixture() {
     agents: {
       async create(options) {
         calls.push(['agents.create', options]);
-        options.setup?.({
-          on(name) {
-            listeners.push(name);
-            return () => {};
-          }
-        });
+        await options.setup?.(agentCtx);
         return handle;
       },
-      async resume(options) { calls.push(['agents.resume', options]); return handle; },
+      async resume(options) {
+        calls.push(['agents.resume', options]);
+        await options.setup?.(agentCtx);
+        return handle;
+      },
       get(id) { calls.push(['agents.get', id]); return agent; },
       list() { calls.push(['agents.list']); return [agent]; },
       roots() { calls.push(['agents.roots']); return [agent]; }
+    },
+    llm: {
+      listProviders() {
+        calls.push(['llm.listProviders']);
+        return [
+          { id: 'deepseek', name: 'DeepSeek' },
+          { id: 'broken', name: 'Broken provider' }
+        ];
+      },
+      async listModels(provider) {
+        calls.push(['llm.listModels', provider]);
+        if (provider === 'broken') throw new Error('catalog unavailable');
+        return [
+          { provider, id: 'model-a', name: 'Model A', description: 'First model' },
+          { provider, id: 'model-b', name: 'Model B' }
+        ];
+      },
+      async resolveModelInfo(provider, model) {
+        calls.push(['llm.resolveModelInfo', provider, model]);
+        return {
+          provider,
+          id: model,
+          name: model === 'model-a' ? 'Model A' : 'Model B',
+          inputModalities: ['text'],
+          context: { contextWindow: 128000 },
+          ...(model === 'model-a'
+            ? {
+                reasoning: {
+                  efforts: [
+                    { id: 'low', name: 'Low' },
+                    { id: 'high', name: 'High', description: 'More reasoning' }
+                  ],
+                  defaultEffort: 'low'
+                }
+              }
+            : {})
+        };
+      },
+      async resolveCallConfig(config) {
+        calls.push(['llm.resolveCallConfig', config]);
+        return {
+          ...config,
+          ...(config.reasoningEffort === undefined ? { reasoningEffort: 'low' } : {})
+        };
+      }
     },
     sessionPersistence: {
       async list(options) { calls.push(['sessionPersistence.list', options]); return { entries: [] }; },
@@ -51,7 +107,7 @@ function fixture() {
   };
 }
 
-test('create uses DSH default model and official agents.create', async () => {
+test('create uses DSH default model and installs the official model-selection hooks', async () => {
   const fx = fixture();
   const driver = new DshAgentDriver(fx.ctx);
   const handle = await driver.create({ cwd: '/workspace', sessionId: 'session-new' });
@@ -67,18 +123,62 @@ test('create uses DSH default model and official agents.create', async () => {
   assert.deepEqual(fx.listeners.sort(), ['agent/request', 'system-prompt/assemble'].sort());
 });
 
-test('resume delegates persisted reconstruction without applying current default model', async () => {
-  const fx = fixture();
+test('resume restores latest request/header before consulting machine current default', async () => {
+  const fx = fixture({
+    loggedConfig: { provider: 'persisted', model: 'old-model', reasoningEffort: 'max' }
+  });
   const driver = new DshAgentDriver(fx.ctx);
   await driver.resume('session-old');
 
   const resume = fx.calls.find(([name]) => name === 'agents.resume');
-  assert.deepEqual(resume[1], { resumeSessionId: 'session-old' });
+  assert.equal(resume[1].resumeSessionId, 'session-old');
+  assert.equal(typeof resume[1].setup, 'function');
+  assert.deepEqual(driver.currentModel(fx.agent), {
+    provider: 'persisted',
+    model: 'old-model',
+    reasoningEffort: 'max'
+  });
   assert.equal(
     fx.calls.some(([name]) => name === 'defaultModel.currentSelection'),
     false,
-    'DSHX must not overwrite a resumed Session with the machine current default model'
+    'persisted request/header must win over the current machine default'
   );
+});
+
+test('blank resumed session falls back to live DSH default only when read', async () => {
+  const fx = fixture();
+  const driver = new DshAgentDriver(fx.ctx);
+  await driver.resume('blank-session');
+  assert.equal(fx.calls.some(([name]) => name === 'defaultModel.currentSelection'), false);
+  assert.deepEqual(driver.currentModel(fx.agent), {
+    provider: 'deepseek',
+    model: 'deepseek-test',
+    reasoningEffort: 'high'
+  });
+});
+
+test('model directory uses public LLM registry and isolates provider failures', async () => {
+  const fx = fixture();
+  const directory = await new DshAgentDriver(fx.ctx).modelDirectory();
+  assert.equal(directory.groups.length, 1);
+  assert.equal(directory.groups[0].provider, 'deepseek');
+  assert.equal(directory.groups[0].models[0].reasoning.defaultEffort, 'low');
+  assert.deepEqual(directory.groups[0].models[0].inputModalities, ['text']);
+  assert.equal(directory.groups[0].models[0].contextWindow, 128000);
+  assert.deepEqual(directory.failures, [{ provider: 'broken', message: 'catalog unavailable' }]);
+});
+
+test('model switch is validated/defaulted by DSH resolveCallConfig before selection changes', async () => {
+  const fx = fixture();
+  const driver = new DshAgentDriver(fx.ctx);
+  await driver.resume('blank-session');
+  const selected = await driver.selectModel(fx.agent, { provider: 'deepseek', model: 'model-a' });
+  assert.deepEqual(selected, { provider: 'deepseek', model: 'model-a', reasoningEffort: 'low' });
+  assert.deepEqual(driver.currentModel(fx.agent), selected);
+  assert.deepEqual(fx.calls.find(([name]) => name === 'llm.resolveCallConfig'), [
+    'llm.resolveCallConfig',
+    { provider: 'deepseek', model: 'model-a' }
+  ]);
 });
 
 test('followup and steering create official DSH user messages and delegate to Agent', () => {
