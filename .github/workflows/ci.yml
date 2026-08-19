@@ -28,6 +28,37 @@ jobs:
       - run: node --check src/server.mjs
       - run: node --check bin/dshx.mjs
 
+  codex-patch:
+    name: Codex thin patch / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize pinned Codex (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/materialize-codex.sh
+      - name: Materialize pinned Codex (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/materialize-codex.ps1
+      - name: Assert patched entrypoint cannot fall back to Codex core
+        shell: bash
+        if: runner.os != 'Windows'
+        run: |
+          grep -q 'DSHX_APP_SERVER_ENDPOINT is required' .upstream/codex/codex-rs/tui/src/main.rs
+          grep -q 'Some(dshx_endpoint)' .upstream/codex/codex-rs/tui/src/main.rs
+      - name: Assert patched entrypoint cannot fall back to Codex core (Windows)
+        shell: pwsh
+        if: runner.os == 'Windows'
+        run: |
+          $source = Get-Content .upstream/codex/codex-rs/tui/src/main.rs -Raw
+          if (-not $source.Contains('DSHX_APP_SERVER_ENDPOINT is required')) { throw 'missing DSHX endpoint guard' }
+          if (-not $source.Contains('Some(dshx_endpoint)')) { throw 'Codex core fallback was not removed' }
+
   ownership-guard:
     name: Ownership boundary
     runs-on: ubuntu-latest
