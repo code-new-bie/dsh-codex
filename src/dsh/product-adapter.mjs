@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DshAppServerAdapter } from './app-server-adapter.mjs';
+import { executeDshCommand } from './commands.mjs';
 import { dshThreadItemsPage, dshThreadTurnsPage } from './history-pages.mjs';
-import { dshForkSeed } from './session-fork.mjs';
+import { DshHostApi } from './host-api.mjs';
+import { codexForkAtSeq } from './session-fork.mjs';
 import { dshSkillsListEntry } from './skills.mjs';
 import { persistedTokenUsageNotification } from './token-usage.mjs';
 
@@ -103,6 +104,10 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     return this._manualCompactions ??= new Map();
   }
 
+  hostApi() {
+    return this._hostApi ??= new DshHostApi(this.ctx, { cwd: this.cwd });
+  }
+
   warnThread(threadId, message) {
     this.send({ method: 'warning', params: { threadId, message } });
   }
@@ -161,8 +166,6 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     const threadId = String(params.threadId ?? '');
     const controller = this.controllers.get(threadId);
     if (!controller) throw new Error(`Thread is not resumed in DSHX: ${threadId}`);
-    const compaction = this.ctx.get('compaction');
-    if (!compaction?.compactNow) throw new Error('DSHX requires DSH service: compaction.compactNow');
     const active = this.manualCompactions();
     if (active.has(threadId)) {
       throw new Error('Compaction is unavailable because this thread already has an active manual compaction');
@@ -172,16 +175,24 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     return {
       result: {},
       afterResponse: () => {
-        void this.runManualCompaction({ threadId, controller, compaction, abortController });
+        void this.runManualCompaction({ threadId, controller, abortController });
       }
     };
   }
 
-  async runManualCompaction({ threadId, controller, compaction, abortController }) {
+  async runManualCompaction({ threadId, controller, abortController }) {
     try {
-      const result = await compaction.compactNow(controller.agent, abortController.signal);
-      if (result == null && !abortController.signal.aborted) {
-        this.warnThread(threadId, 'No compactable history yet.');
+      const execution = await executeDshCommand({
+        ctx: controller.agent.ctx ?? this.ctx,
+        agent: controller.agent,
+        line: '/compact',
+        signal: abortController.signal
+      });
+      // A successful real compaction is rendered from DSH's durable
+      // compaction/* events. A no-op has no such event, so surface the official
+      // command text instead of leaving the user without feedback.
+      if (execution.result?.sourceEventSeq == null && execution.result?.text) {
+        this.warnThread(threadId, execution.result.text);
       }
     } catch (error) {
       if (abortController.signal.aborted) {
@@ -241,6 +252,14 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     };
   }
 
+  async forkSourceEvents(sourceId) {
+    const live = this.controllers.get(sourceId)?.agent ?? this.driver.getLive(sourceId);
+    if (live?.session) return live.session.events ?? [];
+    const inspected = await this.driver.inspectSession(sourceId);
+    if (!inspected) throw new Error(`Unknown DSH session: ${sourceId}`);
+    return inspected.events ?? [];
+  }
+
   async threadFork(params = {}) {
     const sourceId = String(params.threadId ?? '');
     if (!sourceId) throw new Error('thread/fork requires threadId');
@@ -252,41 +271,28 @@ export class DshxProductAdapter extends DshAppServerAdapter {
       throw new Error('DSHX does not expose ephemeral Codex forks over durable DSH sessions');
     }
 
-    let temporarySourceHandle;
-    let sourceAgent = this.controllers.get(sourceId)?.agent ?? this.driver.getLive(sourceId);
-    if (!sourceAgent) {
-      temporarySourceHandle = await this.driver.resume(sourceId);
-      sourceAgent = temporarySourceHandle.agent;
-    }
+    const events = await this.forkSourceEvents(sourceId);
+    const atSeq = codexForkAtSeq(events, {
+      lastTurnId: params.lastTurnId,
+      beforeTurnId: params.beforeTurnId
+    });
+    const forked = await this.hostApi().forkSession({ sessionId: sourceId, atSeq });
+    const childId = String(forked?.sessionId ?? '');
+    if (!childId) throw new Error('DSH Host fork returned no child session id');
 
-    let forkHandle;
-    try {
-      const seed = dshForkSeed(sourceAgent.session.events ?? [], {
-        lastTurnId: params.lastTurnId,
-        beforeTurnId: params.beforeTurnId
-      });
-      const sourcePermission = this.permissions.current(sourceAgent);
-      forkHandle = await this.driver.fork(sourceAgent, {
-        sessionId: randomUUID(),
-        seed
-      });
-      this.permissions.set(forkHandle.agent, sourcePermission.preset);
-      const controller = this.installController(forkHandle);
-      const result = this.threadResponse(controller.agent, {
-        includeTurns: params.excludeTurns !== true
-      });
-      return {
-        result,
-        afterResponse: () => this.send({ method: 'thread/started', params: { thread: result.thread } })
-      };
-    } catch (error) {
-      if (forkHandle && !this.controllers.has(String(forkHandle.agent.id))) {
-        await forkHandle.dispose?.();
-      }
-      throw error;
-    } finally {
-      await temporarySourceHandle?.dispose?.();
-    }
+    // DSH Host publishes the child Agent transactionally. DSHX attaches only a
+    // presentation controller and does not own the AgentHandle or inherited
+    // model/lineage/workspace semantics.
+    const childAgent = this.driver.getLive(childId);
+    if (!childAgent) throw new Error(`DSH Host fork did not publish child Agent ${childId}`);
+    const controller = this.installController({ agent: childAgent, dispose: async () => {} });
+    const result = this.threadResponse(controller.agent, {
+      includeTurns: params.excludeTurns !== true
+    });
+    return {
+      result,
+      afterResponse: () => this.send({ method: 'thread/started', params: { thread: result.thread } })
+    };
   }
 
   historyController(threadId) {
