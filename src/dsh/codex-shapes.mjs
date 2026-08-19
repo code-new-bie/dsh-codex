@@ -2,6 +2,7 @@ import { DshToolPresentationResolver } from './tool-presentation.mjs';
 
 const MODEL_PREFIX = 'dshx:';
 const DEFAULT_REASONING_SENTINEL = 'dsh-default';
+const DSH_SUBAGENT_DESCRIPTOR_VERSION = 2;
 
 function seconds(timeMs, fallback = Math.floor(Date.now() / 1000)) {
   return Number.isFinite(timeMs) ? Math.floor(timeMs / 1000) : fallback;
@@ -67,8 +68,33 @@ function normalizeList(value) {
   return [];
 }
 
-function sourceForHeader(header) {
-  if (header?.origin === 'subagent') return { custom: 'dsh-subagent' };
+function subagentDescriptor(events = []) {
+  const event = events.find((candidate) => candidate?.type === 'subagent/descriptor');
+  const value = event?.data;
+  if (!value || value.version !== DSH_SUBAGENT_DESCRIPTOR_VERSION) return null;
+  if ((value.mode !== 'one-shot' && value.mode !== 'continuable') || typeof value.provider !== 'string') return null;
+  return {
+    mode: value.mode,
+    provider: value.provider,
+    label: typeof value.label === 'string' && value.label.length > 0 ? value.label : null
+  };
+}
+
+function sourceForHeader(header, events = []) {
+  if (header?.origin === 'subagent' && header.parentSession != null) {
+    const descriptor = subagentDescriptor(events);
+    return {
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: String(header.parentSession),
+          depth: Number.isInteger(header.delegationDepth) ? header.delegationDepth : 1,
+          agent_path: null,
+          agent_nickname: descriptor?.label ?? null,
+          agent_role: null
+        }
+      }
+    };
+  }
   return { custom: 'dshx' };
 }
 
@@ -171,6 +197,8 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
   const config = model ?? latestRequestConfig(events) ?? {};
   const createdAt = seconds(meta.createdAt);
   const lastTime = events.length > 0 ? events[events.length - 1]?.time : meta.createdAt;
+  const isSubagent = meta.origin === 'subagent';
+  const descriptor = isSubagent ? subagentDescriptor(events) : null;
   let openTurn = false;
   for (const event of events) {
     if (event?.type === 'turn/start') openTurn = true;
@@ -180,8 +208,8 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
     id: String(meta.id),
     extra: null,
     sessionId: String(meta.id),
-    forkedFromId: meta.parentSession ? String(meta.parentSession) : null,
-    parentThreadId: meta.origin === 'subagent' && meta.parentSession ? String(meta.parentSession) : null,
+    forkedFromId: !isSubagent && meta.parentSession ? String(meta.parentSession) : null,
+    parentThreadId: isSubagent && meta.parentSession ? String(meta.parentSession) : null,
     preview: firstHumanPreview(events),
     ephemeral: false,
     section: null,
@@ -196,10 +224,13 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
     path: null,
     cwd: meta.cwd ?? process.cwd(),
     cliVersion,
-    source: sourceForHeader(meta),
-    canAcceptDirectInput: loaded ? true : null,
+    source: sourceForHeader(meta, events),
+    // DSH continuation authority belongs to ctx.subagents. Showing a child in
+    // Codex navigation must never create a presentation-side bypass that sends
+    // a user turn directly to the child Agent.
+    canAcceptDirectInput: isSubagent ? false : loaded ? true : null,
     threadSource: null,
-    agentNickname: null,
+    agentNickname: descriptor?.label ?? null,
     agentRole: null,
     gitInfo: null,
     name: null,
@@ -382,5 +413,7 @@ export const internals = {
   latestRequestConfig,
   firstHumanPreview,
   inputFromDshMessage,
-  visibleReasoning
+  visibleReasoning,
+  subagentDescriptor,
+  sourceForHeader
 };
