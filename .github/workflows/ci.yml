@@ -94,15 +94,24 @@ jobs:
         run: |
           set -euo pipefail
           MAIN=.upstream/codex/codex-rs/tui/src/main.rs
+          REMOTE=.upstream/codex/codex-rs/app-server-client/src/remote.rs
+          STDIO=.upstream/codex/codex-rs/app-server-client/src/remote/stdio_process.rs
           LIB=.upstream/codex/codex-rs/tui/src/lib.rs
           APP=.upstream/codex/codex-rs/tui/src/app.rs
           SESSION=.upstream/codex/codex-rs/tui/src/app_server_session.rs
           SLASH=.upstream/codex/codex-rs/tui/src/slash_command.rs
           STARTUP=.upstream/codex/codex-rs/tui/src/app/startup.rs
           EVENT=.upstream/codex/codex-rs/tui/src/app/event_dispatch.rs
-          grep -q 'DSHX_APP_SERVER_ENDPOINT is required' "$MAIN"
-          grep -q 'DSHX_APP_SERVER_TOKEN is required' "$MAIN"
+          grep -q 'DSHX_APP_SERVER_PROGRAM is required' "$MAIN"
+          grep -q 'DSHX_APP_SERVER_SCRIPT is required' "$MAIN"
+          grep -q 'RemoteAppServerEndpoint::StdioProcess' "$MAIN"
           grep -q 'Some(dshx_endpoint)' "$MAIN"
+          ! grep -q 'DSHX_APP_SERVER_ENDPOINT' "$MAIN"
+          ! grep -q 'DSHX_APP_SERVER_TOKEN' "$MAIN"
+          grep -q 'StdioProcess' "$REMOTE"
+          test -f "$STDIO"
+          grep -q 'Command::new' "$STDIO"
+          grep -q 'JSONRPCMessage' "$STDIO"
           grep -q 'DSHX_RESUME_MODE' "$MAIN"
           grep -q 'DeepSeek Harness' .upstream/codex/codex-rs/tui/src/history_cell/session.rs
           grep -q 'fn dshx_backend' .upstream/codex/codex-rs/tui/src/bottom_pane/approval_overlay.rs
@@ -115,6 +124,11 @@ jobs:
           grep -q 'dshx resume' "$APP"
           grep -q 'if crate::dshx_backend()' "$SLASH"
           grep -q 'DeepSeek Harness' "$SLASH"
+          grep -q 'DSHX_APP_SERVER_PROGRAM' bin/dshx.mjs
+          grep -q 'bin/dshx-app-server.mjs' scripts/package-platform.mjs
+          ! grep -q 'startDshxLocalServer' bin/dshx.mjs
+          ! grep -q 'DSHX_APP_SERVER_ENDPOINT' bin/dshx.mjs
+          ! grep -q 'DSHX_APP_SERVER_TOKEN' bin/dshx.mjs
           python3 - <<'PY'
           from pathlib import Path
           text = Path('.upstream/codex/codex-rs/tui/src/slash_command.rs').read_text()
@@ -129,10 +143,18 @@ jobs:
         shell: pwsh
         run: |
           $main = Get-Content .upstream\codex\codex-rs\tui\src\main.rs -Raw
-          if (-not $main.Contains('DSHX_APP_SERVER_ENDPOINT is required')) { throw 'missing DSHX endpoint guard' }
-          if (-not $main.Contains('DSHX_APP_SERVER_TOKEN is required')) { throw 'missing DSHX token guard' }
+          if (-not $main.Contains('DSHX_APP_SERVER_PROGRAM is required')) { throw 'missing DSHX stdio program guard' }
+          if (-not $main.Contains('DSHX_APP_SERVER_SCRIPT is required')) { throw 'missing DSHX stdio script guard' }
+          if (-not $main.Contains('RemoteAppServerEndpoint::StdioProcess')) { throw 'DSHX stdio endpoint is missing' }
           if (-not $main.Contains('Some(dshx_endpoint)')) { throw 'Codex core fallback was not removed' }
+          if ($main.Contains('DSHX_APP_SERVER_ENDPOINT')) { throw 'legacy DSHX WebSocket endpoint remains in production TUI' }
+          if ($main.Contains('DSHX_APP_SERVER_TOKEN')) { throw 'legacy DSHX WebSocket token remains in production TUI' }
           if (-not $main.Contains('DSHX_RESUME_MODE')) { throw 'DSHX resume patch is missing' }
+          $remote = Get-Content .upstream\codex\codex-rs\app-server-client\src\remote.rs -Raw
+          if (-not $remote.Contains('StdioProcess')) { throw 'DSHX stdio remote endpoint variant is missing' }
+          $stdio = Get-Content .upstream\codex\codex-rs\app-server-client\src\remote\stdio_process.rs -Raw
+          if (-not $stdio.Contains('Command::new')) { throw 'DSHX stdio process client is missing' }
+          if (-not $stdio.Contains('JSONRPCMessage')) { throw 'DSHX stdio JSON-RPC client is missing' }
           $header = Get-Content .upstream\codex\codex-rs\tui\src\history_cell\session.rs -Raw
           if (-not $header.Contains('DeepSeek Harness')) { throw 'DSHX branding patch is missing' }
           $approval = Get-Content .upstream\codex\codex-rs\tui\src\bottom_pane\approval_overlay.rs -Raw
@@ -157,6 +179,13 @@ jobs:
           if ($hiddenStart -lt 0 -or $hiddenEnd -lt 0) { throw 'DSHX slash hidden block not found' }
           $hidden = $slash.Substring($hiddenStart, $hiddenEnd - $hiddenStart)
           if ($hidden.Contains('SlashCommand::Diff')) { throw '/diff must remain visible in DSHX now that command/exec is DSH-backed' }
+          $launcher = Get-Content bin\dshx.mjs -Raw
+          if (-not $launcher.Contains('DSHX_APP_SERVER_PROGRAM')) { throw 'launcher does not wire stdio adapter' }
+          if ($launcher.Contains('startDshxLocalServer')) { throw 'launcher still boots legacy WebSocket server' }
+          if ($launcher.Contains('DSHX_APP_SERVER_ENDPOINT')) { throw 'launcher still exports legacy WebSocket endpoint' }
+          if ($launcher.Contains('DSHX_APP_SERVER_TOKEN')) { throw 'launcher still exports legacy WebSocket token' }
+          $packager = Get-Content scripts\package-platform.mjs -Raw
+          if (-not $packager.Contains("bin/dshx-app-server.mjs")) { throw 'release package omits stdio adapter' }
       - name: Real pinned TUI PTY smoke
         if: runner.os == 'Linux'
         shell: bash
@@ -165,6 +194,14 @@ jobs:
           node scripts/verify-dsh-closure.mjs
           python3 -m pip install --user pexpect
           python3 test/tui_smoke.py
+      - name: Real pinned TUI ConPTY smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm install
+          node scripts/verify-dsh-closure.mjs
+          npm install --no-save node-pty
+          node test/tui_smoke_windows.mjs
       - name: Build installable platform tarball
         shell: bash
         if: runner.os != 'Windows'
