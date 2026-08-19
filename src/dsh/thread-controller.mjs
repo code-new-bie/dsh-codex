@@ -1,4 +1,5 @@
 import { DshSessionProjector } from './session-projector.mjs';
+import { DshToolPresentationResolver } from './tool-presentation.mjs';
 
 function deferred(timeoutMs, label) {
   let resolve;
@@ -21,16 +22,31 @@ function deferred(timeoutMs, label) {
  * The Agent and Session remain authoritative and are never reconstructed here.
  */
 export class DshThreadController {
-  constructor({ handle, driver, emit = () => {}, turnStartTimeoutMs = 15_000 }) {
+  constructor({ handle, driver, emit = () => {}, turnStartTimeoutMs = 15_000, diagnostics = () => {} }) {
     if (!handle?.agent) throw new Error('DshThreadController requires a DSH AgentHandle');
     this.handle = handle;
     this.agent = handle.agent;
     this.driver = driver;
     this.emit = emit;
     this.turnStartTimeoutMs = turnStartTimeoutMs;
+
+    // Real DSH Agent contexts expose `ctx.tools`; lightweight controller tests
+    // may omit it. Presentation specialization is optional and never affects
+    // tool execution.
+    this.toolPresentation = typeof this.agent.ctx?.get === 'function'
+      ? new DshToolPresentationResolver({
+          ctx: this.agent.ctx,
+          agent: this.agent,
+          threadId: String(this.agent.id),
+          workspaceCwd: this.agent.session?.header?.cwd ?? process.cwd(),
+          diagnostics
+        })
+      : null;
+
     this.projector = new DshSessionProjector({
       threadId: String(this.agent.id),
-      sessionId: String(this.agent.id)
+      sessionId: String(this.agent.id),
+      toolPresentation: this.toolPresentation
     });
     this.pendingTurnStart = null;
     this.closed = false;
@@ -43,14 +59,15 @@ export class DshThreadController {
     return String(this.agent.id);
   }
 
+  toolCorrelation(callId) {
+    return this.toolPresentation?.correlation(callId);
+  }
+
   onSessionEvent(event) {
     if (this.closed) return;
     const projected = this.projector.project(event);
     for (const notification of projected) {
       if (notification.method === 'turn/started' && this.pendingTurnStart) {
-        // The caller needs the DSH-committed turn identity for the JSON-RPC
-        // response. Buffer this first notification so the response can be sent
-        // before the matching notification, mirroring Codex app-server order.
         const pending = this.pendingTurnStart;
         this.pendingTurnStart = null;
         pending.resolve({ turn: notification.params.turn, firstNotification: notification });
@@ -60,10 +77,7 @@ export class DshThreadController {
     }
   }
 
-  /**
-   * Submit a normal follow-up and wait until DSH itself commits turn/start.
-   * Returns a release callback so the transport can send the RPC response first.
-   */
+  /** Submit a normal follow-up and wait until DSH itself commits turn/start. */
   async startTurn(text) {
     if (this.pendingTurnStart) throw new Error('A turn/start request is already awaiting DSH');
     const pending = deferred(this.turnStartTimeoutMs, 'DSH turn/start');
