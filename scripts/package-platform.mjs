@@ -16,6 +16,9 @@ const tuiSource = path.join(root, 'dist', 'bin', exe);
 if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
 }
+if (rootPackage.dependencies?.ws) {
+  throw new Error('Production DSHX release must not depend on the WebSocket package');
+}
 
 const releaseRoot = path.join(root, '.release');
 const stage = path.join(releaseRoot, `dshx-${platform}-${arch}`);
@@ -32,11 +35,13 @@ function copy(relative) {
   fs.cpSync(from, to, { recursive: true });
 }
 
-// Ship only DSHX presentation code. DeepSeek Harness profile/plugin state lives
-// under $DSH_HOME and remains owned by the official @deepseek-ai/dsh runtime.
+// Ship only the production presentation/translation closure. Development
+// protocol servers remain in the source repository, but the installable DSHX
+// package contains no WebSocket server and no loopback transport dependency.
 copy('bin/dshx.mjs');
 copy('bin/dshx-app-server.mjs');
-copy('src');
+copy('src/dsh');
+fs.rmSync(path.join(stage, 'src', 'dsh', 'local-server.mjs'), { force: true });
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
 copy('upstream/DSH_COMMIT');
@@ -68,10 +73,24 @@ const packageJson = {
 };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
+const forbiddenReleasePaths = [
+  path.join(stage, 'src', 'server.mjs'),
+  path.join(stage, 'src', 'dsh', 'local-server.mjs')
+];
+for (const forbidden of forbiddenReleasePaths) {
+  if (fs.existsSync(forbidden)) {
+    throw new Error(`Production release contains legacy transport module: ${path.relative(stage, forbidden)}`);
+  }
+}
+
 // Static release-closure check before npm pack. Every local relative import in
-// shipped JavaScript must resolve inside the staged package.
+// shipped JavaScript must resolve inside the staged package. This also proves
+// no retained production module still imports the removed loopback server.
 for (const file of walkJs(stage)) {
   const source = fs.readFileSync(file, 'utf8');
+  if (/from\s+['\"]ws['\"]|import\s*['\"]ws['\"]/.test(source)) {
+    throw new Error(`Production release still imports ws from ${path.relative(stage, file)}`);
+  }
   for (const match of source.matchAll(/(?:from\s+|import\s*)['\"](\.{1,2}\/[^'\"]+)['\"]/g)) {
     const target = resolveLocalImport(path.dirname(file), match[1]);
     if (!target) throw new Error(`Release package has unresolved local import ${match[1]} from ${path.relative(stage, file)}`);
@@ -118,6 +137,7 @@ const metadata = {
   platform,
   arch,
   node: process.version,
+  transport: 'stdio-process-jsonl',
   dshVersion: rootPackage.dependencies['@deepseek-ai/dsh'],
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
