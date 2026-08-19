@@ -33,7 +33,7 @@ diff --git a/codex-rs/tui/src/slash_command.rs b/codex-rs/tui/src/slash_command.
              }
 -            SlashCommand::Permissions => "choose what Codex is allowed to do",
 +            SlashCommand::Permissions => "choose what DeepSeek Harness is allowed to do",
-@@ -251,6 +251,40 @@ impl SlashCommand {
+@@ -251,6 +251,39 @@ impl SlashCommand {
      }
  
      fn is_visible(self) -> bool {
@@ -53,7 +53,6 @@ diff --git a/codex-rs/tui/src/slash_command.rs b/codex-rs/tui/src/slash_command.
 +                    | SlashCommand::Delete
 +                    | SlashCommand::App
 +                    | SlashCommand::Goal
-+                    | SlashCommand::Agents
 +                    | SlashCommand::MultiAgents
 +                    | SlashCommand::Side
 +                    | SlashCommand::Btw
