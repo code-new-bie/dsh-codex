@@ -63,6 +63,15 @@ export class DshThreadController {
     return this.toolPresentation?.correlation(callId);
   }
 
+  /** Current live DSH turn translated only to presentation identity. */
+  currentLocation() {
+    const number = this.projector.currentTurn;
+    if (!Number.isInteger(number)) return undefined;
+    const turn = this.projector.turns.get(number);
+    if (!turn) return undefined;
+    return { threadId: this.threadId, turnId: turn.id };
+  }
+
   onSessionEvent(event) {
     if (this.closed) return;
     const projected = this.projector.project(event);
