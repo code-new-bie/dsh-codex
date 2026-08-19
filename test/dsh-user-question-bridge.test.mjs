@@ -6,6 +6,7 @@ function fixture({ response, locate } = {}) {
   let provider;
   let disposed = false;
   const requests = [];
+  const completions = [];
   const diagnostics = [];
   const userQuestions = {
     registerProvider(next) {
@@ -16,18 +17,21 @@ function fixture({ response, locate } = {}) {
   const broker = {
     async request(method, params, options) {
       requests.push({ method, params, options });
+      if (response instanceof Error) throw response;
       return response ?? { answers: {} };
     }
   };
   const bridge = new DshUserQuestionBridge({
     ctx: { get(name) { return name === 'userQuestions' ? userQuestions : undefined; } },
     broker,
-    locate: locate ?? (() => ({ threadId: 'session-1', turnId: 'dsh-turn-1', itemId: 'ask-tool-1' })),
+    locate: locate ?? (() => ({ threadId: 'session-1', turnId: 'dsh-turn-1', itemId: 'ask-ui-1' })),
+    complete: (location, outcome) => completions.push({ location, outcome }),
     diagnostics: (message) => diagnostics.push(message)
   });
   return {
     bridge,
     requests,
+    completions,
     diagnostics,
     ask(request) { return provider.ask(request); },
     get disposed() { return disposed; }
@@ -63,6 +67,7 @@ test('single-select question maps to Codex request and structured DSH answer', a
     ]
   });
   assert.deepEqual(result, { answers: [{ id: 'q1', selected: ['PostgreSQL'] }] });
+  assert.equal(fx.completions[0].outcome.status, 'completed');
 });
 
 test('free-text answer is returned as DSH custom text', async () => {
@@ -106,12 +111,18 @@ test('multi-select is explicit unsupported instead of silently degrading to sing
   assert.equal(fx.requests.length, 0);
 });
 
-test('missing tool correlation is an explicit compatibility failure', async () => {
+test('missing presentation location is an explicit compatibility failure', async () => {
   const fx = fixture({ locate: () => null });
   await assert.rejects(
     () => fx.ask({ questions: [{ id: 'q', question: 'Question?' }] }),
-    /could not correlate/
+    /could not open a Codex presentation item/
   );
+});
+
+test('request failure closes the synthetic interaction as failed', async () => {
+  const fx = fixture({ response: new Error('transport lost') });
+  await assert.rejects(() => fx.ask({ questions: [{ id: 'q', question: 'Question?' }] }), /transport lost/);
+  assert.equal(fx.completions[0].outcome.status, 'failed');
 });
 
 test('bridge disposal unregisters only the UI provider', () => {
