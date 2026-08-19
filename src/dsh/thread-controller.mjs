@@ -1,4 +1,5 @@
 import { DshSessionProjector } from './session-projector.mjs';
+import { tokenUsageNotification } from './token-usage.mjs';
 import { DshToolPresentationResolver } from './tool-presentation.mjs';
 
 function deferred(timeoutMs, label) {
@@ -17,6 +18,12 @@ function deferred(timeoutMs, label) {
   };
 }
 
+function usageRelevant(event) {
+  return event?.type === 'assistant/message'
+    || event?.type === 'request/context'
+    || (event?.type === 'assistant/chunk' && event.data?.chunk?.type === 'usage');
+}
+
 /**
  * Owns only the presentation lifetime for one already-created DSH Agent.
  * The Agent and Session remain authoritative and are never reconstructed here.
@@ -29,6 +36,7 @@ export class DshThreadController {
     this.driver = driver;
     this.emit = emit;
     this.turnStartTimeoutMs = turnStartTimeoutMs;
+    this.diagnostics = diagnostics;
 
     // Real DSH Agent contexts expose `ctx.tools`; lightweight controller tests
     // may omit it. Presentation specialization is optional and never affects
@@ -49,9 +57,11 @@ export class DshThreadController {
       toolPresentation: this.toolPresentation
     });
     this.pendingTurnStart = null;
+    this.responseGate = null;
+    this.lastTokenUsageSignature = null;
     this.closed = false;
 
-    const onSessionEvent = (_session, event) => this.onSessionEvent(event);
+    const onSessionEvent = (session, event) => this.onSessionEvent(session, event);
     this.disposeSessionListener = this.agent.ctx.on('session/event', onSessionEvent);
   }
 
@@ -72,35 +82,77 @@ export class DshThreadController {
     return { threadId: this.threadId, turnId: turn.id };
   }
 
-  onSessionEvent(event) {
-    if (this.closed) return;
+  deliver(notification) {
+    if (this.responseGate && !this.responseGate.released) {
+      this.responseGate.buffered.push(notification);
+      return;
+    }
+    this.emit(notification);
+  }
+
+  maybeProjectTokenUsage(event) {
+    if (!usageRelevant(event)) return;
+    const location = this.currentLocation();
+    if (!location) return;
+    try {
+      const notification = tokenUsageNotification({
+        ctx: this.agent.ctx,
+        session: this.agent.session,
+        threadId: location.threadId,
+        turnId: location.turnId
+      });
+      if (!notification) return;
+      const signature = JSON.stringify(notification.params.tokenUsage);
+      if (signature === this.lastTokenUsageSignature) return;
+      this.lastTokenUsageSignature = signature;
+      this.deliver(notification);
+    } catch (error) {
+      // Token accounting is presentation-only. A malformed optional projection
+      // must never interrupt the DSH agent loop or transcript stream.
+      this.diagnostics(`token usage projection failed: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  onSessionEvent(session, event) {
+    if (this.closed || session !== this.agent.session) return;
     const projected = this.projector.project(event);
     for (const notification of projected) {
       if (notification.method === 'turn/started' && this.pendingTurnStart) {
         const pending = this.pendingTurnStart;
         this.pendingTurnStart = null;
-        pending.resolve({ turn: notification.params.turn, firstNotification: notification });
+        const gate = {
+          firstNotification: notification,
+          buffered: [],
+          released: false
+        };
+        this.responseGate = gate;
+        pending.resolve({ turn: notification.params.turn, gate });
         continue;
       }
-      this.emit(notification);
+      this.deliver(notification);
     }
+    this.maybeProjectTokenUsage(event);
   }
 
   /** Submit a normal follow-up and wait until DSH itself commits turn/start. */
   async startTurn(text) {
-    if (this.pendingTurnStart) throw new Error('A turn/start request is already awaiting DSH');
+    if (this.pendingTurnStart || (this.responseGate && !this.responseGate.released)) {
+      throw new Error('A turn/start request is already awaiting DSHX protocol release');
+    }
     const pending = deferred(this.turnStartTimeoutMs, 'DSH turn/start');
     this.pendingTurnStart = pending;
     try {
       this.driver.followup(this.agent, text);
-      const { turn, firstNotification } = await pending.promise;
-      let released = false;
+      const { turn, gate } = await pending.promise;
       return {
         turn,
         release: () => {
-          if (released) return;
-          released = true;
-          this.emit(firstNotification);
+          if (gate.released) return;
+          gate.released = true;
+          if (this.responseGate === gate) this.responseGate = null;
+          this.emit(gate.firstNotification);
+          for (const notification of gate.buffered) this.emit(notification);
+          gate.buffered.length = 0;
         }
       };
     } catch (error) {
@@ -126,6 +178,11 @@ export class DshThreadController {
     this.closed = true;
     this.pendingTurnStart?.reject(new Error('DSHX thread controller closed'));
     this.pendingTurnStart = null;
+    if (this.responseGate && !this.responseGate.released) {
+      this.responseGate.released = true;
+      this.responseGate.buffered.length = 0;
+    }
+    this.responseGate = null;
     this.disposeSessionListener?.();
     await this.handle.dispose?.();
   }
