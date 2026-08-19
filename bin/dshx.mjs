@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
@@ -12,7 +13,7 @@ const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const VERSION = PACKAGE.version;
 
 function usage() {
-  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n`;
+  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
 }
 
 function packagedTuiBinary() {
@@ -23,6 +24,10 @@ function packagedTuiBinary() {
     path.join(ROOT, '.build', 'codex', 'release', process.platform === 'win32' ? 'codex-tui.exe' : 'codex-tui')
   ].filter(Boolean);
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+function dshxTuiHome() {
+  return path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'));
 }
 
 function parseLaunchArgs(args) {
@@ -72,7 +77,8 @@ function doctor() {
           : 'not found',
       tuiCheck.status === 0
     ],
-    ['DeepSeek Harness', runtimeDetail, runtimeOk]
+    ['DeepSeek Harness', runtimeDetail, runtimeOk],
+    ['Presentation home', dshxTuiHome(), true]
   ];
   for (const [name, detail, ok] of rows) {
     process.stdout.write(`${ok ? '✓' : '✗'} ${name}: ${detail}\n`);
@@ -119,6 +125,15 @@ async function run() {
     return;
   }
 
+  const tuiHome = dshxTuiHome();
+  try {
+    fs.mkdirSync(tuiHome, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    process.stderr.write(`dshx: cannot create presentation home ${tuiHome}: ${error instanceof Error ? error.message : error}\n`);
+    process.exitCode = 1;
+    return;
+  }
+
   const debug = process.env.DSHX_DEBUG === '1';
   const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
   let local;
@@ -134,6 +149,9 @@ async function run() {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      // Do not inherit CODEX_HOME: DSHX uses Codex code as a presentation
+      // component only and must not read/write the user's ordinary Codex state.
+      CODEX_HOME: tuiHome,
       ...launch.resumeEnv,
       DSHX_APP_SERVER_ENDPOINT: local.url,
       DSHX_APP_SERVER_TOKEN: local.token
