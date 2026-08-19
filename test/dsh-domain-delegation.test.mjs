@@ -17,8 +17,8 @@ test('manual compaction delegates to DSH commands.execute and does not own compa
   const warnings = [];
   adapter.warnThread = (threadId, message) => warnings.push([threadId, message]);
   const commands = {
-    async execute(agent, line, signal) {
-      calls.push({ agent, line, signal });
+    async execute(agent, line, images, signal) {
+      calls.push({ agent, line, images, signal });
       return { result: { kind: 'success', text: 'No compactable history yet.' } };
     }
   };
@@ -37,6 +37,7 @@ test('manual compaction delegates to DSH commands.execute and does not own compa
   assert.equal(calls.length, 1);
   assert.equal(calls[0].agent, agent);
   assert.equal(calls[0].line, '/compact');
+  assert.deepEqual(calls[0].images, []);
   assert.equal(calls[0].signal, abortController.signal);
   assert.deepEqual(warnings, [['session-1', 'No compactable history yet.']]);
   assert.equal(adapter._manualCompactions.size, 0);
