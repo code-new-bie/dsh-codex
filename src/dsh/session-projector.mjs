@@ -13,6 +13,12 @@ function visibleText(message) {
     .join('');
 }
 
+function reasoningContent(message) {
+  return (message?.content ?? [])
+    .filter((block) => block?.type === 'reasoning' && typeof block.text === 'string')
+    .map((block) => block.text);
+}
+
 function toolResultCallId(data) {
   const sourceId = data?.message?.source?.kind === 'tool' ? data.message.source.callId : undefined;
   if (sourceId !== undefined) return sourceId;
@@ -67,6 +73,7 @@ export class DshSessionProjector {
     this.toolPresentation = toolPresentation;
     this.turns = new Map();
     this.assistantItems = new Map();
+    this.reasoningItems = new Map();
     this.tools = new Map();
     this.currentTurn = null;
     this.latestHeader = null;
@@ -123,8 +130,40 @@ export class DshSessionProjector {
     if (!Number.isInteger(turn) || !Number.isInteger(step) || !chunk) return [];
     const turnState = this.turns.get(turn);
     if (!turnState) return [];
-    if (chunk.type !== 'text-delta' || typeof chunk.text !== 'string') return [];
 
+    if (chunk.type === 'reasoning-delta' && typeof chunk.text === 'string') {
+      const key = `${turn}:${step}`;
+      let item = this.reasoningItems.get(key);
+      const events = [];
+      if (!item) {
+        item = { id: `dsh-reasoning-${turn}-${step}`, content: [] };
+        this.reasoningItems.set(key, item);
+        events.push({
+          method: 'item/started',
+          params: {
+            threadId: this.threadId,
+            turnId: turnState.id,
+            startedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
+            item: { type: 'reasoning', id: item.id, summary: [], content: [] }
+          }
+        });
+      }
+      const index = Number.isInteger(chunk.index) && chunk.index >= 0 ? chunk.index : 0;
+      item.content[index] = `${item.content[index] ?? ''}${chunk.text}`;
+      events.push({
+        method: 'item/reasoning/textDelta',
+        params: {
+          threadId: this.threadId,
+          turnId: turnState.id,
+          itemId: item.id,
+          delta: chunk.text,
+          contentIndex: index
+        }
+      });
+      return events;
+    }
+
+    if (chunk.type !== 'text-delta' || typeof chunk.text !== 'string') return [];
     const key = `${turn}:${step}`;
     let item = this.assistantItems.get(key);
     const events = [];
@@ -155,10 +194,40 @@ export class DshSessionProjector {
     const turnState = this.turns.get(turn);
     if (!turnState) return [];
     const key = `${turn}:${step}`;
+    const completedAtMs = Number.isFinite(event.time) ? event.time : nowMillis();
+    const events = [];
+
+    const finalReasoning = reasoningContent(message);
+    let reasoning = this.reasoningItems.get(key);
+    if (reasoning || finalReasoning.length > 0) {
+      if (!reasoning) {
+        reasoning = { id: `dsh-reasoning-${turn}-${step}`, content: [] };
+        this.reasoningItems.set(key, reasoning);
+        events.push({
+          method: 'item/started',
+          params: {
+            threadId: this.threadId,
+            turnId: turnState.id,
+            startedAtMs: completedAtMs,
+            item: { type: 'reasoning', id: reasoning.id, summary: [], content: [] }
+          }
+        });
+      }
+      reasoning.content = finalReasoning.length > 0 ? finalReasoning : reasoning.content;
+      events.push({
+        method: 'item/completed',
+        params: {
+          threadId: this.threadId,
+          turnId: turnState.id,
+          completedAtMs,
+          item: { type: 'reasoning', id: reasoning.id, summary: [], content: reasoning.content }
+        }
+      });
+    }
+
     const finalText = visibleText(message);
     let item = this.assistantItems.get(key);
-    const events = [];
-    if (!item) {
+    if (!item && finalText.length > 0) {
       item = { id: `dsh-assistant-${turn}-${step}`, text: '' };
       this.assistantItems.set(key, item);
       events.push({
@@ -166,21 +235,23 @@ export class DshSessionProjector {
         params: {
           threadId: this.threadId,
           turnId: turnState.id,
-          startedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
+          startedAtMs: completedAtMs,
           item: { type: 'agentMessage', id: item.id, text: '', phase: null, memoryCitation: null, delivery: null }
         }
       });
     }
-    item.text = finalText;
-    events.push({
-      method: 'item/completed',
-      params: {
-        threadId: this.threadId,
-        turnId: turnState.id,
-        completedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
-        item: { type: 'agentMessage', id: item.id, text: finalText, phase: null, memoryCitation: null, delivery: null }
-      }
-    });
+    if (item) {
+      item.text = finalText;
+      events.push({
+        method: 'item/completed',
+        params: {
+          threadId: this.threadId,
+          turnId: turnState.id,
+          completedAtMs,
+          item: { type: 'agentMessage', id: item.id, text: finalText, phase: null, memoryCitation: null, delivery: null }
+        }
+      });
+    }
     return events;
   }
 
