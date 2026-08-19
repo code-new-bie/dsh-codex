@@ -94,6 +94,83 @@ test('skills/list refuses Codex forceReload because DSH invalidation belongs to 
   );
 });
 
+test('thread/settings/update maps Codex workspace profile to the DSH canonical preset', async () => {
+  const adapter = bareAdapter();
+  const applied = [];
+  const agent = { session: { header: { cwd: path.resolve('/workspace') } } };
+  adapter.controllers.set('session-1', { agent });
+  adapter.ctx = {
+    get(name) {
+      if (name === 'permissionPresets') return { names: ['workspace-write', 'danger-full-access'] };
+      return undefined;
+    }
+  };
+  adapter.permissions = {
+    set(receivedAgent, preset) {
+      assert.equal(receivedAgent, agent);
+      applied.push(preset);
+    },
+    current() {
+      return {
+        preset: 'workspace-write',
+        codex: { approvalPolicy: 'on-request' },
+        dsh: { sandboxMode: 'workspace-write', approvalPolicy: 'ask' }
+      };
+    }
+  };
+  adapter.applyModelOverride = async () => { throw new Error('model path should not run'); };
+
+  const result = await adapter.threadSettingsUpdate({
+    threadId: 'session-1',
+    permissions: ':workspace',
+    approvalPolicy: 'on-request'
+  });
+  assert.deepEqual(applied, ['workspace-write']);
+  assert.deepEqual(result, { result: {} });
+});
+
+test('thread/settings/update delegates model and effort while tolerating Codex default collaboration metadata', async () => {
+  const adapter = bareAdapter();
+  const agent = { session: { header: { cwd: path.resolve('/workspace') } } };
+  adapter.controllers.set('session-1', { agent });
+  const modelCalls = [];
+  adapter.applyModelOverride = async (receivedAgent, update) => {
+    assert.equal(receivedAgent, agent);
+    modelCalls.push(update);
+  };
+  adapter.applyStartPermissions = async () => { throw new Error('permission path should not run'); };
+
+  const result = await adapter.threadSettingsUpdate({
+    threadId: 'session-1',
+    model: 'dsh://deepseek/deepseek-chat',
+    effort: 'high',
+    collaborationMode: { mode: 'default', settings: {} }
+  });
+  assert.deepEqual(modelCalls, [{ model: 'dsh://deepseek/deepseek-chat', effort: 'high' }]);
+  assert.deepEqual(result, { result: {} });
+});
+
+test('thread/settings/update refuses unsupported Codex-only settings when they are the actual requested change', async () => {
+  const adapter = bareAdapter();
+  adapter.controllers.set('session-1', {
+    agent: { session: { header: { cwd: path.resolve('/workspace') } } }
+  });
+  await assert.rejects(
+    () => adapter.threadSettingsUpdate({
+      threadId: 'session-1',
+      collaborationMode: { mode: 'plan', settings: {} }
+    }),
+    /no equivalent public collaboration-mode/
+  );
+  await assert.rejects(
+    () => adapter.threadSettingsUpdate({
+      threadId: 'session-1',
+      personality: 'friendly'
+    }),
+    /no equivalent public personality/
+  );
+});
+
 test('turn/steer delegates only to the exact active DSH turn', () => {
   const adapter = bareAdapter();
   const steered = [];
