@@ -182,6 +182,19 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     };
   }
 
+  async saveDefaultModelSelection(selection) {
+    const defaults = this.ctx.get('agentDefaultModel');
+    if (!defaults?.saveSelection) {
+      this.diagnostics('DSH agentDefaultModel service has no saveSelection(); current session selection remains valid but deployment default was not persisted');
+      return;
+    }
+    await defaults.saveSelection({
+      provider: selection.provider,
+      model: selection.model,
+      ...(selection.reasoningEffort == null ? {} : { reasoningEffort: selection.reasoningEffort })
+    });
+  }
+
   async threadSettingsUpdate(params = {}) {
     const threadId = String(params.threadId ?? '');
     const controller = this.controllers.get(threadId);
@@ -222,10 +235,11 @@ export class DshxProductAdapter extends DshAppServerAdapter {
       });
     }
     if (params.model != null || params.effort != null) {
-      await this.applyModelOverride(agent, {
+      const selection = await this.applyModelOverride(agent, {
         model: params.model,
         effort: params.effort
       });
+      await this.saveDefaultModelSelection(selection);
     }
 
     return { result: {} };
