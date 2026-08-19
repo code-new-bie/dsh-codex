@@ -48,3 +48,26 @@ diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
 +            && should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
  
      let config = if should_show_onboarding {
+diff --git a/codex-rs/tui/src/app/startup.rs b/codex-rs/tui/src/app/startup.rs
+--- a/codex-rs/tui/src/app/startup.rs
++++ b/codex-rs/tui/src/app/startup.rs
+@@ -4,6 +4,9 @@
+ use super::*;
+ 
+ async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -> Option<String> {
++    if crate::dshx_backend() {
++        return None;
++    }
+     let provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
+     match provider.runtime_base_url().await {
+         Ok(base_url) => base_url,
+@@ -492,7 +495,8 @@ impl App {
+         #[cfg(target_os = "windows")]
+         {
+             let startup_permission_profile = app.config.permissions.effective_permission_profile();
+-            let should_check = crate::windows_sandbox::level_from_config(&app.config)
++            let should_check = !crate::dshx_backend()
++                && crate::windows_sandbox::level_from_config(&app.config)
+                 != WindowsSandboxLevel::Disabled
+                 && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
+                 && !app
