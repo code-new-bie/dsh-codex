@@ -51,6 +51,8 @@ function hasSupportedThreadSetting(params) {
 export class DshxProductAdapter extends DshAppServerAdapter {
   async dispatch(method, params) {
     switch (method) {
+      case 'account/usage/read':
+        return this.accountUsageRead(params);
       case 'skills/list':
         return this.skillsList(params);
       case 'thread/turns/list':
@@ -66,6 +68,26 @@ export class DshxProductAdapter extends DshAppServerAdapter {
       default:
         return super.dispatch(method, params);
     }
+  }
+
+  accountUsageRead(_params = {}) {
+    // Codex's account/usage/read is a billing API (credits/USD estimates), not
+    // a generic token counter. DSH token/context accounting is surfaced through
+    // thread/tokenUsage/updated instead. Returning threadUsage:null tells the
+    // Codex UI that billing usage is unavailable without inventing zero cost.
+    return {
+      result: {
+        summary: {
+          lifetimeTokens: null,
+          peakDailyTokens: null,
+          longestRunningTurnSec: null,
+          currentStreakDays: null,
+          longestStreakDays: null
+        },
+        dailyUsageBuckets: null,
+        threadUsage: null
+      }
+    };
   }
 
   threadResponse(agent, options = {}) {
