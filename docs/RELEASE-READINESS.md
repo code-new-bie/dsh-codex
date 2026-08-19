@@ -19,9 +19,9 @@ No item becomes green because code for the check exists. A release candidate is 
 | Local production transport | no production TCP listener; pinned TUI rejects TCP WebSocket endpoint | pass |
 | Cross-platform local IPC data plane | `dshx-ipc-bridge --check` performs real private UDS + WebSocket-framing ping/pong | pass on Linux/Windows/macOS |
 | Visible slash-command contract | `scripts/verify-slash-contract.mjs` classifies every pinned Codex command and asserts DSH-backed methods for every runtime-owned command left visible in DSHX | pass |
-| Real pinned TUI / Linux | PTY smoke drives pinned TUI through local IPC deterministic adapter | pass |
-| Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology | pass |
-| Automated CJK transport/render sanity | Windows ConPTY test submits and observes a Chinese prompt | pass |
+| Real pinned TUI / Linux | PTY smoke drives pinned TUI through local IPC, resizes the terminal, and roundtrips a CJK prompt | pass |
+| Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology, resizes the terminal, and roundtrips a Chinese prompt | pass |
+| Automated CJK/resize sanity | Linux PTY + Windows ConPTY verify UTF-8 input/echo survives a live resize without process/session loss | pass |
 | Packaging | platform tarball + static local-import closure check + exact DSH shrinkwrap | pass |
 | Clean installation | install generated tarball then `dshx --version` + `dshx doctor` | pass on every release platform |
 | Release artifacts | Linux x64, Windows x64, macOS arm64, macOS x64 | all built |
@@ -30,9 +30,9 @@ No item becomes green because code for the check exists. A release candidate is 
 
 ## Manual UX acceptance gate
 
-Automation can exercise ConPTY and Chinese text, but it cannot establish real **IME composition-state behavior** or visual parity. For the exact 1.0 release candidate, perform a side-by-side run against the pinned Codex TUI using the same Windows Terminal dimensions/theme and record pass/fail for:
+Automation can exercise PTY/ConPTY resize and Chinese text, but it cannot establish real **IME composition-state behavior**, mouse behavior, or visual parity. For the exact 1.0 release candidate, perform a side-by-side run against the pinned Codex TUI using the same Windows Terminal dimensions/theme and record pass/fail for:
 
-- Windows Terminal startup, resize, scroll and mouse behavior;
+- Windows Terminal startup, visual reflow after resize, scroll and mouse behavior;
 - Chinese IME composition/commit/cancel in the multiline composer;
 - wide CJK glyph alignment in transcript/tool/diff cells;
 - slash completion and help keyboard behavior;
