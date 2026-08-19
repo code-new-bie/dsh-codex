@@ -211,12 +211,16 @@ jobs:
         run: |
           grep -q "must not grow into an agent framework" docs/ARCHITECTURE.md
           grep -q "DeepSeek Harness remains an upstream dependency" docs/TEAM.md
-      - name: Assert production runtime remains official DSH composition
+      - name: Assert runtime composition remains profile-owned by DSH
         shell: bash
         run: |
-          grep -q "dsh-base" src/dsh/runtime-boot.mjs
-          grep -q "dsh-headless" src/dsh/runtime-boot.mjs
-          grep -q "startup: { disabled: true }" src/dsh/runtime-boot.mjs
+          grep -q "loadProfile" src/dsh/runtime-boot.mjs
+          grep -q "healProfilesModuleFallback" src/dsh/runtime-boot.mjs
+          grep -q "loadOptionalPatches" src/dsh/runtime-boot.mjs
+          grep -q "DEFAULT_PROFILE = 'headless'" src/dsh/runtime-boot.mjs
+          grep -q "headless-startup" src/dsh/runtime-boot.mjs
+          grep -q "headless-runner" src/dsh/runtime-boot.mjs
+          ! grep -q "OFFICIAL_BUNDLES" src/dsh/runtime-boot.mjs
       - name: Assert shell and workspace execution remain DSH-owned
         shell: bash
         run: |
