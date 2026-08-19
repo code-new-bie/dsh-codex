@@ -2,6 +2,7 @@ import path from 'node:path';
 import { DshAppServerAdapter } from './app-server-adapter.mjs';
 import { dshThreadItemsPage, dshThreadTurnsPage } from './history-pages.mjs';
 import { dshSkillsListEntry } from './skills.mjs';
+import { persistedTokenUsageNotification } from './token-usage.mjs';
 
 function textInput(params) {
   const inputs = Array.isArray(params?.input) ? params.input : [];
@@ -157,10 +158,17 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     }
     await this.applyModelOverride(agent, params);
     await this.applyStartPermissions(agent, params);
+    const result = this.threadResponse(agent, {
+      includeTurns: params.excludeTurns !== true
+    });
+    const replay = persistedTokenUsageNotification({
+      ctx: this.ctx,
+      session: agent.session,
+      threadId
+    });
     return {
-      result: this.threadResponse(agent, {
-        includeTurns: params.excludeTurns !== true
-      })
+      result,
+      afterResponse: replay ? () => this.send(replay) : undefined
     };
   }
 
