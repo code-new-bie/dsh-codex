@@ -19,7 +19,7 @@ jobs:
   lock:
     if: github.repository == 'code-new-bie/dsh-codex'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +35,13 @@ jobs:
       - name: Verify DeepSeek Harness closure remains the supported rc.8 line
         shell: bash
         run: node scripts/verify-dsh-closure.mjs . package-lock.json
+      - name: Prove frozen graph installs and boots before committing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          node scripts/runtime-smoke.mjs
       - name: Commit frozen graph when it changed
         shell: bash
         run: |
