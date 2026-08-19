@@ -6,7 +6,7 @@ import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import pty from 'node-pty';
+import * as pty from 'node-pty';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -26,19 +26,19 @@ function stringEnv(extra = {}) {
 }
 
 function waitForOutput(state, needle, timeoutMs = 30_000) {
-  if (stripTerminalControl(state.output).includes(needle)) return Promise.resolve();
+  const started = Date.now();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      dispose.dispose();
-      reject(new Error(`Timed out waiting for ${JSON.stringify(needle)}. Transcript:\n${stripTerminalControl(state.output)}`));
-    }, timeoutMs);
-    const dispose = state.term.onData((chunk) => {
-      state.output += chunk;
-      if (!stripTerminalControl(state.output).includes(needle)) return;
-      clearTimeout(timer);
-      dispose.dispose();
-      resolve();
-    });
+    const poll = setInterval(() => {
+      const transcript = stripTerminalControl(state.output);
+      if (transcript.includes(needle)) {
+        clearInterval(poll);
+        resolve();
+        return;
+      }
+      if (Date.now() - started < timeoutMs) return;
+      clearInterval(poll);
+      reject(new Error(`Timed out waiting for ${JSON.stringify(needle)}. Transcript:\n${transcript}`));
+    }, 50);
   });
 }
 
@@ -68,6 +68,10 @@ function firstLine(stream, child, stderrText, timeoutMs = 15_000) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function stopChild(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -92,6 +96,7 @@ const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-conpty-home-'));
 let server;
 let serverStderr = '';
 let term;
+let dataDisposable;
 try {
   server = spawn(process.execPath, [path.join(ROOT, 'bin', 'dshx-stub-local.mjs')], {
     cwd: ROOT,
@@ -118,8 +123,8 @@ try {
       DSHX_APP_SERVER_ENDPOINT: endpoint
     })
   });
-  const state = { term, output: '' };
-  term.onData((chunk) => { state.output += chunk; });
+  const state = { output: '' };
+  dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
   await waitForOutput(state, 'DeepSeek Harness');
   const prompt = '你好，DSHX ConPTY';
@@ -128,7 +133,11 @@ try {
   await waitForOutput(state, prompt);
   process.stdout.write('Windows ConPTY DSHX local-IPC + CJK smoke passed\n');
 } finally {
+  dataDisposable?.dispose?.();
   try { term?.kill(); } catch {}
+  // Give ConPTY/TUI a bounded moment to close the local socket cleanly before
+  // terminating the deterministic adapter process.
+  await sleep(100);
   await stopChild(server);
   fs.rmSync(codexHome, { recursive: true, force: true });
 }
