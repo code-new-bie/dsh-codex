@@ -11,71 +11,78 @@ function bareAdapter() {
   return adapter;
 }
 
+function skillRegistry(absoluteSkill, calls = []) {
+  return {
+    async snapshot(options) {
+      calls.push(['snapshot', options]);
+      return {
+        complete: true,
+        skills: [
+          {
+            name: 'review',
+            description: 'Review code',
+            invocation: { modelInvocable: true, userInvocable: true },
+            source: 'project-agents',
+            provider: 'filesystem'
+          },
+          {
+            name: 'remote-skill',
+            description: 'Remote skill',
+            invocation: { modelInvocable: true, userInvocable: true },
+            source: 'custom',
+            provider: 'remote'
+          },
+          {
+            name: 'model-only',
+            description: 'Model only',
+            invocation: { modelInvocable: true, userInvocable: false },
+            source: 'runtime',
+            provider: 'runtime'
+          }
+        ]
+      };
+    },
+    async get(name) {
+      calls.push(['get', name]);
+      if (name === 'review') {
+        return {
+          name,
+          description: 'Review code',
+          invocation: { modelInvocable: true, userInvocable: true },
+          source: 'project-agents',
+          provider: 'filesystem',
+          content: 'review',
+          path: absoluteSkill
+        };
+      }
+      if (name === 'remote-skill') {
+        return {
+          name,
+          description: 'Remote skill',
+          invocation: { modelInvocable: true, userInvocable: true },
+          source: 'custom',
+          provider: 'remote',
+          content: 'remote'
+        };
+      }
+      return undefined;
+    }
+  };
+}
+
 test('skills/list reads DSH public registry and only returns faithfully path-backed user skills', async () => {
   const adapter = bareAdapter();
   const absoluteSkill = path.resolve('/workspace/.agents/skills/review/SKILL.md');
+  const calls = [];
   adapter.ctx = {
     get(name) {
-      if (name !== 'skills') return undefined;
-      return {
-        async snapshot(options) {
-          assert.equal(options.cwd, path.resolve('/workspace'));
-          return {
-            complete: true,
-            skills: [
-              {
-                name: 'review',
-                description: 'Review code',
-                invocation: { modelInvocable: true, userInvocable: true },
-                source: 'project-agents',
-                provider: 'filesystem'
-              },
-              {
-                name: 'remote-skill',
-                description: 'Remote skill',
-                invocation: { modelInvocable: true, userInvocable: true },
-                source: 'custom',
-                provider: 'remote'
-              },
-              {
-                name: 'model-only',
-                description: 'Model only',
-                invocation: { modelInvocable: true, userInvocable: false },
-                source: 'runtime',
-                provider: 'runtime'
-              }
-            ]
-          };
-        },
-        async get(name) {
-          if (name === 'review') {
-            return {
-              name,
-              description: 'Review code',
-              invocation: { modelInvocable: true, userInvocable: true },
-              source: 'project-agents',
-              provider: 'filesystem',
-              content: 'review',
-              path: absoluteSkill
-            };
-          }
-          if (name === 'remote-skill') {
-            return {
-              name,
-              description: 'Remote skill',
-              invocation: { modelInvocable: true, userInvocable: true },
-              source: 'custom',
-              provider: 'remote',
-              content: 'remote'
-            };
-          }
-          return undefined;
-        }
-      };
+      return name === 'skills' ? skillRegistry(absoluteSkill, calls) : undefined;
     }
   };
 
   const result = await adapter.skillsList({ cwds: [] });
+  assert.equal(calls[0][0], 'snapshot');
+  assert.equal(calls[0][1].cwd, path.resolve('/workspace'));
   assert.equal(result.result.data.length, 1);
   assert.deepEqual(result.result.data[0].skills, [{
     name: 'review',
@@ -86,12 +93,22 @@ test('skills/list reads DSH public registry and only returns faithfully path-bac
   }]);
 });
 
-test('skills/list refuses Codex forceReload because DSH invalidation belongs to providers', async () => {
+test('skills/list accepts pinned Codex startup forceReload as a fresh DSH snapshot read', async () => {
   const adapter = bareAdapter();
-  await assert.rejects(
-    () => adapter.skillsList({ forceReload: true }),
-    /DSH skill cache invalidation is provider-owned/
-  );
+  const absoluteSkill = path.resolve('/workspace/.agents/skills/review/SKILL.md');
+  const calls = [];
+  const diagnostics = [];
+  adapter.diagnostics = (message) => diagnostics.push(message);
+  adapter.ctx = {
+    get(name) {
+      return name === 'skills' ? skillRegistry(absoluteSkill, calls) : undefined;
+    }
+  };
+
+  const result = await adapter.skillsList({ cwds: [path.resolve('/workspace')], forceReload: true });
+  assert.equal(calls.filter(([kind]) => kind === 'snapshot').length, 1);
+  assert.equal(result.result.data[0].skills[0].name, 'review');
+  assert.match(diagnostics.join('\n'), /provider-owned cache policy/);
 });
 
 test('thread/settings/update maps Codex workspace profile to the DSH canonical preset', async () => {
