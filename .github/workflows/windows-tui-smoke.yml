@@ -2,7 +2,7 @@ name: Windows TUI Smoke
 
 on:
   push:
-    branches: [main, 'work/**', 'agent/**']
+    branches: [main, 'work/**', 'agent/**', 'release/**']
   pull_request:
 
 permissions:
