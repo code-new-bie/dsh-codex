@@ -3,11 +3,7 @@ const nowMillis = () => Date.now();
 
 function parseJsonOrString(value) {
   if (typeof value !== 'string') return value ?? null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
+  try { return JSON.parse(value); } catch { return value; }
 }
 
 function visibleText(message) {
@@ -17,15 +13,24 @@ function visibleText(message) {
     .join('');
 }
 
+function toolResultCallId(data) {
+  const sourceId = data?.message?.source?.kind === 'tool' ? data.message.source.callId : undefined;
+  if (sourceId !== undefined) return sourceId;
+  const block = data?.message?.content?.find?.((entry) => entry?.type === 'tool-result');
+  return block?.toolCallId;
+}
+
+function toolResultFailed(data) {
+  const block = data?.message?.content?.find?.((entry) => entry?.type === 'tool-result');
+  return Boolean(block?.isError ?? data?.error);
+}
+
 function mapTurnStatus(reason) {
   switch (reason?.kind) {
-    case 'completed':
-      return 'completed';
+    case 'completed': return 'completed';
     case 'aborted':
-    case 'interrupted':
-      return 'interrupted';
-    default:
-      return 'failed';
+    case 'interrupted': return 'interrupted';
+    default: return 'failed';
   }
 }
 
@@ -44,22 +49,22 @@ function turnRecord(id, status, startedAt, completedAt = null, error = null) {
     error,
     startedAt,
     completedAt,
-    durationMs:
-      startedAt != null && completedAt != null ? Math.max(0, (completedAt - startedAt) * 1000) : null
+    durationMs: startedAt != null && completedAt != null
+      ? Math.max(0, (completedAt - startedAt) * 1000)
+      : null
   };
 }
 
 /**
- * A deliberately small, stateful UI projector for official DSH Session events.
- *
- * It never mutates DSH, never executes tools and never persists conversation state.
- * Its maps are disposable correlation state required to speak the Codex TUI protocol.
+ * Stateful presentation projection of official DSH Session events.
+ * Durable truth stays in DSH; all maps here are disposable UI correlation.
  */
 export class DshSessionProjector {
-  constructor({ threadId, sessionId = threadId } = {}) {
+  constructor({ threadId, sessionId = threadId, toolPresentation = null } = {}) {
     if (!threadId) throw new Error('DshSessionProjector requires threadId');
     this.threadId = threadId;
     this.sessionId = sessionId;
+    this.toolPresentation = toolPresentation;
     this.turns = new Map();
     this.assistantItems = new Map();
     this.tools = new Map();
@@ -71,20 +76,13 @@ export class DshSessionProjector {
   project(event) {
     if (!event || typeof event.type !== 'string') return [];
     switch (event.type) {
-      case 'turn/start':
-        return this.turnStarted(event);
-      case 'turn/end':
-        return this.turnEnded(event);
-      case 'assistant/chunk':
-        return this.assistantChunk(event);
-      case 'assistant/message':
-        return this.assistantMessage(event);
-      case 'tool/call':
-        return this.toolCall(event);
-      case 'tool/result':
-        return this.toolResult(event);
-      case 'todo/write':
-        return this.todoWrite(event);
+      case 'turn/start': return this.turnStarted(event);
+      case 'turn/end': return this.turnEnded(event);
+      case 'assistant/chunk': return this.assistantChunk(event);
+      case 'assistant/message': return this.assistantMessage(event);
+      case 'tool/call': return this.toolCall(event);
+      case 'tool/result': return this.toolResult(event);
+      case 'todo/write': return this.todoWrite(event);
       case 'request/header':
         this.latestHeader = event.data?.header ?? null;
         return [];
@@ -103,15 +101,7 @@ export class DshSessionProjector {
     const startedAt = Number.isFinite(event.time) ? Math.floor(event.time / 1000) : nowSeconds();
     this.turns.set(dshTurn, { id: turnId, startedAt });
     this.currentTurn = dshTurn;
-    return [
-      {
-        method: 'turn/started',
-        params: {
-          threadId: this.threadId,
-          turn: turnRecord(turnId, 'inProgress', startedAt)
-        }
-      }
-    ];
+    return [{ method: 'turn/started', params: { threadId: this.threadId, turn: turnRecord(turnId, 'inProgress', startedAt) } }];
   }
 
   turnEnded(event) {
@@ -121,20 +111,11 @@ export class DshSessionProjector {
     const reason = event.data?.reason;
     const status = mapTurnStatus(reason);
     const completedAt = Number.isFinite(event.time) ? Math.floor(event.time / 1000) : nowSeconds();
-    const error =
-      status === 'failed' && reason?.kind === 'error'
-        ? { message: reason.error?.message ?? 'DSH turn failed', codexErrorInfo: null, additionalDetails: null }
-        : null;
+    const error = status === 'failed' && reason?.kind === 'error'
+      ? { message: reason.error?.message ?? 'DSH turn failed', codexErrorInfo: null, additionalDetails: null }
+      : null;
     if (this.currentTurn === dshTurn) this.currentTurn = null;
-    return [
-      {
-        method: 'turn/completed',
-        params: {
-          threadId: this.threadId,
-          turn: turnRecord(state.id, status, state.startedAt, completedAt, error)
-        }
-      }
-    ];
+    return [{ method: 'turn/completed', params: { threadId: this.threadId, turn: turnRecord(state.id, status, state.startedAt, completedAt, error) } }];
   }
 
   assistantChunk(event) {
@@ -142,17 +123,13 @@ export class DshSessionProjector {
     if (!Number.isInteger(turn) || !Number.isInteger(step) || !chunk) return [];
     const turnState = this.turns.get(turn);
     if (!turnState) return [];
-
-    // Only visible-text deltas are projected until the pinned Codex reasoning
-    // delta contract is mapped explicitly. Ignoring a presentation surface is
-    // safer than misclassifying DSH reasoning semantics.
     if (chunk.type !== 'text-delta' || typeof chunk.text !== 'string') return [];
 
     const key = `${turn}:${step}`;
     let item = this.assistantItems.get(key);
     const events = [];
     if (!item) {
-      item = { id: `dsh-assistant-${turn}-${step}`, text: '', started: true };
+      item = { id: `dsh-assistant-${turn}-${step}`, text: '' };
       this.assistantItems.set(key, item);
       events.push({
         method: 'item/started',
@@ -160,26 +137,14 @@ export class DshSessionProjector {
           threadId: this.threadId,
           turnId: turnState.id,
           startedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
-          item: {
-            type: 'agentMessage',
-            id: item.id,
-            text: '',
-            phase: null,
-            memoryCitation: null,
-            delivery: null
-          }
+          item: { type: 'agentMessage', id: item.id, text: '', phase: null, memoryCitation: null, delivery: null }
         }
       });
     }
     item.text += chunk.text;
     events.push({
       method: 'item/agentMessage/delta',
-      params: {
-        threadId: this.threadId,
-        turnId: turnState.id,
-        itemId: item.id,
-        delta: chunk.text
-      }
+      params: { threadId: this.threadId, turnId: turnState.id, itemId: item.id, delta: chunk.text }
     });
     return events;
   }
@@ -194,7 +159,7 @@ export class DshSessionProjector {
     let item = this.assistantItems.get(key);
     const events = [];
     if (!item) {
-      item = { id: `dsh-assistant-${turn}-${step}`, text: '', started: true };
+      item = { id: `dsh-assistant-${turn}-${step}`, text: '' };
       this.assistantItems.set(key, item);
       events.push({
         method: 'item/started',
@@ -202,14 +167,7 @@ export class DshSessionProjector {
           threadId: this.threadId,
           turnId: turnState.id,
           startedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
-          item: {
-            type: 'agentMessage',
-            id: item.id,
-            text: '',
-            phase: null,
-            memoryCitation: null,
-            delivery: null
-          }
+          item: { type: 'agentMessage', id: item.id, text: '', phase: null, memoryCitation: null, delivery: null }
         }
       });
     }
@@ -220,14 +178,7 @@ export class DshSessionProjector {
         threadId: this.threadId,
         turnId: turnState.id,
         completedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
-        item: {
-          type: 'agentMessage',
-          id: item.id,
-          text: finalText,
-          phase: null,
-          memoryCitation: null,
-          delivery: null
-        }
+        item: { type: 'agentMessage', id: item.id, text: finalText, phase: null, memoryCitation: null, delivery: null }
       }
     });
     return events;
@@ -237,37 +188,57 @@ export class DshSessionProjector {
     const { turn, callId, name, arguments: rawArguments } = event.data ?? {};
     const turnState = this.turns.get(turn);
     if (!turnState || !callId || typeof name !== 'string') return [];
-    const item = {
-      type: 'dynamicToolCall',
-      id: `dsh-tool-${String(callId)}`,
-      namespace: null,
-      tool: name,
-      arguments: parseJsonOrString(rawArguments),
-      status: 'inProgress',
-      contentItems: null,
-      success: null,
-      durationMs: null
-    };
-    this.tools.set(String(callId), { item, turnId: turnState.id, startedAt: event.time ?? nowMillis() });
-    return [
-      {
-        method: 'item/started',
-        params: {
-          threadId: this.threadId,
-          turnId: turnState.id,
-          startedAtMs: Number.isFinite(event.time) ? event.time : nowMillis(),
-          item
-        }
-      }
-    ];
+    const startedAtMs = Number.isFinite(event.time) ? event.time : nowMillis();
+
+    let item;
+    if (this.toolPresentation) {
+      ({ item } = this.toolPresentation.start({
+        turnId: turnState.id,
+        callId,
+        name,
+        rawArguments,
+        startedAtMs
+      }));
+    } else {
+      item = {
+        type: 'dynamicToolCall',
+        id: `dsh-tool-${String(callId)}`,
+        namespace: null,
+        tool: name,
+        arguments: parseJsonOrString(rawArguments),
+        status: 'inProgress',
+        contentItems: null,
+        success: null,
+        durationMs: null
+      };
+      this.tools.set(String(callId), { item, turnId: turnState.id, startedAt: startedAtMs });
+    }
+
+    return [{ method: 'item/started', params: { threadId: this.threadId, turnId: turnState.id, startedAtMs, item } }];
   }
 
   toolResult(event) {
-    const { callId, error } = event.data ?? {};
+    const callId = toolResultCallId(event.data);
+    if (callId === undefined) return [];
+    const completedAtMs = Number.isFinite(event.time) ? event.time : nowMillis();
+
+    if (this.toolPresentation) {
+      const completed = this.toolPresentation.complete({ callId, resultData: event.data, completedAtMs });
+      if (!completed) return [];
+      return [{
+        method: 'item/completed',
+        params: {
+          threadId: this.threadId,
+          turnId: completed.state.turnId,
+          completedAtMs,
+          item: completed.item
+        }
+      }];
+    }
+
     const state = this.tools.get(String(callId));
     if (!state) return [];
-    const failed = Boolean(error);
-    const completedAtMs = Number.isFinite(event.time) ? event.time : nowMillis();
+    const failed = toolResultFailed(event.data);
     const completed = {
       ...state.item,
       status: failed ? 'failed' : 'completed',
@@ -275,17 +246,7 @@ export class DshSessionProjector {
       durationMs: Math.max(0, completedAtMs - state.startedAt)
     };
     this.tools.delete(String(callId));
-    return [
-      {
-        method: 'item/completed',
-        params: {
-          threadId: this.threadId,
-          turnId: state.turnId,
-          completedAtMs,
-          item: completed
-        }
-      }
-    ];
+    return [{ method: 'item/completed', params: { threadId: this.threadId, turnId: state.turnId, completedAtMs, item: completed } }];
   }
 
   todoWrite(event) {
@@ -293,19 +254,14 @@ export class DshSessionProjector {
     const turnState = this.turns.get(this.currentTurn);
     if (!turnState) return [];
     const todos = Array.isArray(event.data?.todos) ? event.data.todos : [];
-    return [
-      {
-        method: 'turn/plan/updated',
-        params: {
-          threadId: this.threadId,
-          turnId: turnState.id,
-          explanation: null,
-          plan: todos.map((todo) => ({
-            step: String(todo.content ?? ''),
-            status: mapPlanStatus(todo.status)
-          }))
-        }
+    return [{
+      method: 'turn/plan/updated',
+      params: {
+        threadId: this.threadId,
+        turnId: turnState.id,
+        explanation: null,
+        plan: todos.map((todo) => ({ step: String(todo.content ?? ''), status: mapPlanStatus(todo.status) }))
       }
-    ];
+    }];
   }
 }
