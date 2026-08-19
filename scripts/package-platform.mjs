@@ -35,6 +35,7 @@ function copy(relative) {
 // Ship only DSHX presentation code. DeepSeek Harness profile/plugin state lives
 // under $DSH_HOME and remains owned by the official @deepseek-ai/dsh runtime.
 copy('bin/dshx.mjs');
+copy('bin/dshx-app-server.mjs');
 copy('src');
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
