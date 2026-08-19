@@ -21,6 +21,8 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
 
   async dispatch(method, params) {
     switch (method) {
+      case 'thread/fork':
+        return this.threadForkPresentation(params);
       case 'thread/name/set':
         return this.threadNameSet(params);
       case 'thread/shellCommand':
@@ -65,6 +67,21 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     return {
       ...response,
       thread: { ...response.thread, name }
+    };
+  }
+
+  async threadForkPresentation(params = {}) {
+    const response = await super.threadFork(params);
+    const startedThread = { ...response.result.thread, turns: [] };
+    return {
+      ...response,
+      // Pinned Codex emits copied history only in the fork response. The
+      // thread/started notification introduces metadata/live state and must not
+      // replay those copied turns a second time before paginated hydration.
+      afterResponse: () => this.send({
+        method: 'thread/started',
+        params: { thread: startedThread }
+      })
     };
   }
 
