@@ -66,7 +66,7 @@ const packageJson = {
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
-  files: ['bin', 'src', 'config', 'dist/bin', 'upstream', 'LICENSE', 'NOTICE']
+  files: ['bin', 'src', 'config', 'dist/bin', 'upstream', 'LICENSE', 'NOTICE', 'npm-shrinkwrap.json']
 };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
@@ -80,8 +80,28 @@ for (const file of walkJs(stage)) {
   }
 }
 
+// A published DSH release is version-synchronized across @deepseek-ai/dsh-*.
+// Generate a shrinkwrap from the exact registry closure, then reject packaging
+// if npm selected any different DSH release through a peer/caret range. This
+// makes future upstream releases fail loudly until DSHX deliberately updates
+// its pin, rather than silently shipping a mixed Harness runtime.
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+execFileSync(npm, [
+  'install',
+  '--package-lock-only',
+  '--ignore-scripts',
+  '--no-audit',
+  '--no-fund'
+], { cwd: stage, stdio: 'inherit' });
+execFileSync(process.execPath, [
+  path.join(root, 'scripts', 'verify-dsh-closure.mjs'),
+  stage,
+  path.join(stage, 'package-lock.json')
+], { cwd: root, stdio: 'inherit' });
+fs.renameSync(path.join(stage, 'package-lock.json'), path.join(stage, 'npm-shrinkwrap.json'));
+
 const packOutput = execFileSync(
-  process.platform === 'win32' ? 'npm.cmd' : 'npm',
+  npm,
   ['pack', stage, '--pack-destination', out, '--json'],
   { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
 );
@@ -100,6 +120,7 @@ const metadata = {
   platform,
   arch,
   node: process.version,
+  dshVersion: rootPackage.dependencies['@deepseek-ai/dsh'],
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
   tarball: path.basename(targetTarball),
