@@ -38,9 +38,6 @@ export class DshThreadController {
     this.turnStartTimeoutMs = turnStartTimeoutMs;
     this.diagnostics = diagnostics;
 
-    // Real DSH Agent contexts expose `ctx.tools`; lightweight controller tests
-    // may omit it. Presentation specialization is optional and never affects
-    // tool execution.
     this.toolPresentation = typeof this.agent.ctx?.get === 'function'
       ? new DshToolPresentationResolver({
           ctx: this.agent.ctx,
@@ -58,6 +55,7 @@ export class DshThreadController {
     });
     this.pendingTurnStart = null;
     this.responseGate = null;
+    this.preparedUserContent = null;
     this.lastTokenUsageSignature = null;
     this.closed = false;
 
@@ -73,13 +71,31 @@ export class DshThreadController {
     return this.toolPresentation?.correlation(callId);
   }
 
-  /** Current live DSH turn translated only to presentation identity. */
   currentLocation() {
     const number = this.projector.currentTurn;
     if (!Number.isInteger(number)) return undefined;
     const turn = this.projector.turns.get(number);
     if (!turn) return undefined;
     return { threadId: this.threadId, turnId: turn.id };
+  }
+
+  /**
+   * Stage rich Codex input for exactly one existing base-adapter turn/steer call.
+   * The base adapter still owns all model/cwd/permission/sandbox validation.
+   */
+  prepareUserContent(content) {
+    if (this.preparedUserContent != null) throw new Error('DSHX rich input slot is already occupied');
+    const slot = { content };
+    this.preparedUserContent = slot;
+    return () => {
+      if (this.preparedUserContent === slot) this.preparedUserContent = null;
+    };
+  }
+
+  consumeUserContent(fallback) {
+    const slot = this.preparedUserContent;
+    this.preparedUserContent = null;
+    return slot?.content ?? fallback;
   }
 
   deliver(notification) {
@@ -107,8 +123,6 @@ export class DshThreadController {
       this.lastTokenUsageSignature = signature;
       this.deliver(notification);
     } catch (error) {
-      // Token accounting is presentation-only. A malformed optional projection
-      // must never interrupt the DSH agent loop or transcript stream.
       this.diagnostics(`token usage projection failed: ${error instanceof Error ? error.message : error}`);
     }
   }
@@ -135,14 +149,15 @@ export class DshThreadController {
   }
 
   /** Submit a normal follow-up and wait until DSH itself commits turn/start. */
-  async startTurn(text) {
+  async startTurn(fallbackContent) {
     if (this.pendingTurnStart || (this.responseGate && !this.responseGate.released)) {
       throw new Error('A turn/start request is already awaiting DSHX protocol release');
     }
+    const content = this.consumeUserContent(fallbackContent);
     const pending = deferred(this.turnStartTimeoutMs, 'DSH turn/start');
     this.pendingTurnStart = pending;
     try {
-      this.driver.followup(this.agent, text);
+      this.driver.followup(this.agent, content);
       const { turn, gate } = await pending.promise;
       return {
         turn,
@@ -161,8 +176,8 @@ export class DshThreadController {
     }
   }
 
-  steer(text) {
-    this.driver.steer(this.agent, text);
+  steer(fallbackContent) {
+    this.driver.steer(this.agent, this.consumeUserContent(fallbackContent));
   }
 
   interrupt(options) {
@@ -178,6 +193,7 @@ export class DshThreadController {
     this.closed = true;
     this.pendingTurnStart?.reject(new Error('DSHX thread controller closed'));
     this.pendingTurnStart = null;
+    this.preparedUserContent = null;
     if (this.responseGate && !this.responseGate.released) {
       this.responseGate.released = true;
       this.responseGate.buffered.length = 0;
