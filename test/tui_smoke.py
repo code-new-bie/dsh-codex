@@ -7,6 +7,7 @@ import tempfile
 import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROMPT = "你好，DSHX PTY resize"
 server = subprocess.Popen(
     ["node", "bin/dshx-stub-local.mjs"],
     cwd=ROOT,
@@ -45,14 +46,15 @@ try:
         try:
             child.expect("DeepSeek Harness")
             transcript.append(child.before + child.after)
-            child.send("smoke from pty\r")
+            child.setwinsize(40, 100)
+            child.send(PROMPT + "\r")
             child.expect("DSHX protocol stub received:")
             transcript.append(child.before + child.after)
-            child.expect("smoke from pty")
+            child.expect(PROMPT)
             transcript.append(child.before + child.after)
         except Exception:
             transcript.append(child.before or "")
-            raise AssertionError("Pinned DSHX TUI local-IPC smoke failed. Transcript:\n" + "".join(transcript))
+            raise AssertionError("Pinned DSHX TUI local-IPC/CJK/resize smoke failed. Transcript:\n" + "".join(transcript))
         finally:
             child.close(force=True)
 finally:
