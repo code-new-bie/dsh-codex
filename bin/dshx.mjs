@@ -5,13 +5,14 @@ import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
+import { dshxRuntimeEntries } from '../src/dsh/runtime-boot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = PACKAGE.version;
 
 function usage() {
-  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check runtime/TUI prerequisites\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n`;
+  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n`;
 }
 
 function packagedTuiBinary() {
@@ -45,6 +46,21 @@ function doctor() {
   const tuiCheck = executable && fs.existsSync(executable)
     ? spawnSync(executable, ['--version'], { encoding: 'utf8' })
     : { status: 127, stdout: '', stderr: '' };
+
+  let runtimeDetail;
+  let runtimeOk = false;
+  try {
+    const entries = dshxRuntimeEntries();
+    const required = ['llm', 'session', 'agent', 'permission', 'approval', 'user-questions', 'tools'];
+    const ids = new Set(entries.filter((entry) => !entry.disabled).map((entry) => entry.id));
+    const missing = required.filter((id) => !ids.has(id));
+    if (missing.length > 0) throw new Error(`missing official bundle entries: ${missing.join(', ')}`);
+    runtimeDetail = `official DSH bundle composition (${entries.length} entries)`;
+    runtimeOk = true;
+  } catch (error) {
+    runtimeDetail = error instanceof Error ? error.message : String(error);
+  }
+
   const rows = [
     ['Node', process.version, Number(process.versions.node.split('.')[0]) >= 20],
     [
@@ -52,10 +68,11 @@ function doctor() {
       tuiCheck.status === 0
         ? (tuiCheck.stdout || tuiCheck.stderr).trim()
         : executable
-          ? `${executable} is not built/runnable`
+          ? `${executable} is not built/runnable${tuiCheck.stderr ? `: ${tuiCheck.stderr.trim()}` : ''}`
           : 'not found',
       tuiCheck.status === 0
-    ]
+    ],
+    ['DeepSeek Harness', runtimeDetail, runtimeOk]
   ];
   for (const [name, detail, ok] of rows) {
     process.stdout.write(`${ok ? '✓' : '✗'} ${name}: ${detail}\n`);
@@ -63,8 +80,8 @@ function doctor() {
   if (rows.some((row) => !row[2])) {
     process.stderr.write(
       process.platform === 'win32'
-        ? 'Build the pinned TUI with `.\\scripts\\build-codex-tui.ps1`.\n'
-        : 'Build the pinned TUI with `./scripts/build-codex-tui.sh`.\n'
+        ? 'For a source checkout, build the pinned TUI with `.\\scripts\\build-codex-tui.ps1`; packaged releases include it.\n'
+        : 'For a source checkout, build the pinned TUI with `./scripts/build-codex-tui.sh`; packaged releases include it.\n'
     );
     process.exitCode = 1;
   }
