@@ -25,7 +25,23 @@ function parseError(error) {
   };
 }
 
-function createSocketDirectory(root = os.tmpdir()) {
+function defaultSocketRoot({
+  home,
+  platform = process.platform,
+  temporaryDirectory = os.tmpdir(),
+  userHome = os.homedir()
+} = {}) {
+  if (platform !== 'win32') return temporaryDirectory;
+  // codex_uds can enforce 0700 on Unix. Its Windows implementation inherits
+  // directory ACLs instead, so do not trust an arbitrary/shared %TEMP% root.
+  // Anchor the rendezvous below the current user's DSHX presentation home,
+  // whose parent in turn lives below the user's profile by default.
+  const presentationHome = path.resolve(home || path.join(userHome, '.dshx', 'codex-tui'));
+  return path.join(presentationHome, 'ipc');
+}
+
+function createSocketDirectory(root) {
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const directory = fs.mkdtempSync(path.join(root, 'dshx-'));
   if (process.platform !== 'win32') fs.chmodSync(directory, 0o700);
   return directory;
@@ -110,7 +126,8 @@ export async function startDshxLocalServer({
   socketRoot
 } = {}) {
   const ctx = runtime ?? await bootRuntime({ cwd });
-  const socketDirectory = createSocketDirectory(socketRoot);
+  const rendezvousRoot = path.resolve(socketRoot ?? defaultSocketRoot({ home }));
+  const socketDirectory = createSocketDirectory(rendezvousRoot);
   const socketPath = path.join(socketDirectory, 'app.sock');
   const args = bridgeArgs ?? [socketPath];
   let bridge;
@@ -214,3 +231,8 @@ export async function startDshxLocalServer({
     close
   };
 }
+
+export const localServerInternals = {
+  defaultSocketRoot,
+  createSocketDirectory
+};
