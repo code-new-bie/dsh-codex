@@ -166,8 +166,8 @@ jobs:
         if: runner.os != 'Windows'
         run: node scripts/package-platform.mjs
       - name: Build installable platform tarball (Windows)
-        shell: pwsh
         if: runner.os == 'Windows'
+        shell: pwsh
         run: node scripts/package-platform.mjs
       - name: Clean-install smoke (Unix)
         if: runner.os != 'Windows'
@@ -222,3 +222,13 @@ jobs:
           grep -q "tools.execute" src/dsh/workspace-command.mjs
           grep -q "agent" src/dsh/workspace-command.mjs
           grep -q "case 'command/exec'" src/dsh/release-adapter.mjs
+      - name: Assert fork and compaction domain semantics remain DSH-owned
+        shell: bash
+        run: |
+          grep -q "@deepseek-ai/dsh-host-apiproxy" src/dsh/host-api.mjs
+          grep -q "api.sessions.fork" src/dsh/host-api.mjs
+          grep -q "executeDshCommand" src/dsh/product-adapter.mjs
+          grep -q "commands.execute" src/dsh/commands.mjs
+          ! grep -q "compactNow" src/dsh/product-adapter.mjs
+          ! grep -E "seedLength|parentSession|dshForkSeed" src/dsh/agent-driver.mjs src/dsh/product-adapter.mjs
+          ! grep -q "fork(sourceAgent" src/dsh/agent-driver.mjs
