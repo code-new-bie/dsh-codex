@@ -14,11 +14,27 @@ diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
  use codex_tui::run_main;
  use codex_utils_cli::CliConfigOverrides;
  use std::io::Write;
-@@ -47,6 +49,25 @@ fn main() -> anyhow::Result<()> {
+@@ -47,6 +49,42 @@ fn main() -> anyhow::Result<()> {
          inner
              .config_overrides
              .raw_overrides
              .splice(0..0, top_cli.config_overrides.raw_overrides);
++        if let Ok(mode) = std::env::var("DSHX_RESUME_MODE") {
++            match mode.as_str() {
++                "picker" => inner.resume_picker = true,
++                "last" => inner.resume_last = true,
++                "id" => {
++                    inner.resume_session_id = Some(
++                        std::env::var("DSHX_RESUME_SESSION_ID").map_err(|_| {
++                            anyhow::anyhow!(
++                                "DSHX_RESUME_SESSION_ID is required when DSHX_RESUME_MODE=id"
++                            )
++                        })?,
++                    );
++                }
++                other => anyhow::bail!("invalid DSHX_RESUME_MODE: {other}"),
++            }
++        }
 +        let dshx_endpoint = std::env::var("DSHX_APP_SERVER_ENDPOINT").map_err(|_| {
 +            anyhow::anyhow!(
 +                "DSHX_APP_SERVER_ENDPOINT is required; DSHX never falls back to the Codex agent runtime"
