@@ -18,7 +18,12 @@ const NAME = 'dshx';
 const DSH_PROFILE_BIN_NAME = 'dsh';
 const DEFAULT_PROFILE = 'headless';
 const PROFILE_ROOT_FILENAME = 'cordis.yml';
-const PROFILE_ROOT_CONFIG = `# dshx profile root — composition remains owned by DeepSeek Harness.\n[]\n`;
+// Match the official `dsh` launcher's profile-root contract: this file is only
+// the Loader/include base anchor. The real user-owned configuration is carried
+// by the profile's `cordis.patch.yml` plus `$DSH_HOME/cordis.patch.yml`.
+// Rewriting this empty root on every boot is intentional DSH behavior and
+// prevents Loader tree write-back from becoming a second persisted config.
+const PROFILE_ROOT_CONFIG = `# DSHX uses the same empty profile root contract as the official dsh launcher.\n# The effective tree is composed from DSH bundle and patch layers.\n# Edit cordis.patch.yml, not this file.\n[]\n`;
 const DSHX_SURFACE_PATCHES = [
   // The official headless profile is the default because it is the DSH runtime
   // without a browser surface. Its one-shot CLI startup/runner are themselves
@@ -83,6 +88,9 @@ export function dshxRuntimeProfile({
   healProfilesModuleFallback(installAnchor, home);
   const profile = loadProfile(DSH_PROFILE_BIN_NAME, profileName, installAnchor, home);
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME);
+  // Official DSH deliberately rewrites this empty include root before boot.
+  // Never write `profile.patchPath` or the home patch here: those are the
+  // authoritative user configuration layers and are read-only to DSHX.
   writeFileSync(rootConfig, PROFILE_ROOT_CONFIG);
 
   const bundlePatches = profile.layers.flatMap((layer) => layer.patches);
