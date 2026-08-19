@@ -9,19 +9,14 @@ diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src
 +}
 +
  impl ChatWidget {
-@@ -20,7 +24,7 @@ impl ChatWidget {
-             return;
-         }
- 
--        let include_read_only = cfg!(target_os = "windows");
-+        let include_read_only = cfg!(target_os = "windows") && !dshx_backend();
+@@ -24,7 +28,8 @@ impl ChatWidget {
          let current_approval =
              AskForApproval::from(self.config.permissions.approval_policy.value());
          let current_permission_profile = self.config.permissions.permission_profile().clone();
 -        let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
 +        let guardian_approval_enabled = !dshx_backend()
 +            && self.config.features.enabled(Feature::GuardianApproval);
-@@ -35,7 +39,8 @@ impl ChatWidget {
+@@ -35,7 +40,8 @@ impl ChatWidget {
          #[cfg(target_os = "windows")]
          let windows_degraded_sandbox_enabled =
 -            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
@@ -29,7 +24,7 @@ diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src
 +                && matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
          #[cfg(not(target_os = "windows"))]
          let windows_degraded_sandbox_enabled = false;
-@@ -292,7 +297,10 @@ impl ChatWidget {
+@@ -292,7 +298,10 @@ impl ChatWidget {
 -        if approvals_reviewer == ApprovalsReviewer::User && preset.id == "auto" {
 +        // DSHX never enables or configures Codex's local Windows sandbox. The
 +        // selected workspace preset is sent to the DSH app-server adapter and
