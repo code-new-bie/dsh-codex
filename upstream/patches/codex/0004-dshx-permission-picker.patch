@@ -21,7 +21,15 @@ diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src
 -        let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
 +        let guardian_approval_enabled = !dshx_backend()
 +            && self.config.features.enabled(Feature::GuardianApproval);
-@@ -292,7 +296,10 @@ impl ChatWidget {
+@@ -35,7 +39,8 @@ impl ChatWidget {
+         #[cfg(target_os = "windows")]
+         let windows_degraded_sandbox_enabled =
+-            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
++            !dshx_backend()
++                && matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
+         #[cfg(not(target_os = "windows"))]
+         let windows_degraded_sandbox_enabled = false;
+@@ -292,7 +297,10 @@ impl ChatWidget {
 -        if approvals_reviewer == ApprovalsReviewer::User && preset.id == "auto" {
 +        // DSHX never enables or configures Codex's local Windows sandbox. The
 +        // selected workspace preset is sent to the DSH app-server adapter and
