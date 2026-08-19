@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'work/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    name: Protocol / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm install
+      - run: npm test
+      - run: node --check src/protocol.mjs
+      - run: node --check src/server.mjs
+      - run: node --check bin/dshx.mjs
+
+  ownership-guard:
+    name: Ownership boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert architecture contract exists
+        shell: bash
+        run: |
+          grep -q "must not grow into an agent framework" docs/ARCHITECTURE.md
+          grep -q "DeepSeek Harness remains an upstream dependency" docs/TEAM.md
