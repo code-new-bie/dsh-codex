@@ -1,0 +1,507 @@
+diff --git a/codex-rs/app-server-client/Cargo.toml b/codex-rs/app-server-client/Cargo.toml
+--- a/codex-rs/app-server-client/Cargo.toml
++++ b/codex-rs/app-server-client/Cargo.toml
+@@ -27,7 +27,7 @@ codex-utils-rustls-provider = { workspace = true }
+ futures = { workspace = true }
+ serde = { workspace = true }
+ serde_json = { workspace = true }
+-tokio = { workspace = true, features = ["sync", "time", "rt"] }
++tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process"] }
+ tokio-tungstenite = { workspace = true }
+ toml = { workspace = true }
+ tracing = { workspace = true }
+diff --git a/codex-rs/app-server-client/src/remote.rs b/codex-rs/app-server-client/src/remote.rs
+--- a/codex-rs/app-server-client/src/remote.rs
++++ b/codex-rs/app-server-client/src/remote.rs
+@@ -9,6 +9,8 @@ callers such as the TUI can switch between them without changing their
+ higher-level session logic.
+ */
+ 
++mod stdio_process;
++
+ use std::collections::HashMap;
+ use std::collections::VecDeque;
+ use std::io::Error as IoError;
+@@ -78,6 +80,10 @@ pub enum RemoteAppServerEndpoint {
+     UnixSocket {
+         socket_path: AbsolutePathBuf,
+     },
++    StdioProcess {
++        program: String,
++        args: Vec<String>,
++    },
+ }
+ 
+ #[derive(Debug, Clone)]
+@@ -188,6 +194,10 @@ impl RemoteAppServerClient {
+                 Self::connect_with_stream(channel_capacity, endpoint, stream, initialize_params)
+                     .await
+             }
++            RemoteAppServerEndpoint::StdioProcess { program, args } => {
++                stdio_process::connect_stdio_process(
++                    channel_capacity, program, args, initialize_params).await
++            }
+         }
+     }
+ 
+diff --git a/codex-rs/app-server-client/src/remote/stdio_process.rs b/codex-rs/app-server-client/src/remote/stdio_process.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/app-server-client/src/remote/stdio_process.rs
+@@ -0,0 +1,370 @@
++use std::collections::HashMap;
++use std::io::Error as IoError;
++use std::io::ErrorKind;
++use std::io::Result as IoResult;
++use std::process::Stdio;
++use std::time::Duration;
++
++use codex_app_server_protocol::ClientNotification;
++use codex_app_server_protocol::ClientRequest;
++use codex_app_server_protocol::InitializeParams;
++use codex_app_server_protocol::JSONRPCError;
++use codex_app_server_protocol::JSONRPCErrorError;
++use codex_app_server_protocol::JSONRPCMessage;
++use codex_app_server_protocol::JSONRPCResponse;
++use codex_app_server_protocol::RequestId;
++use codex_app_server_protocol::ServerRequest;
++use tokio::io::AsyncBufReadExt;
++use tokio::io::AsyncWriteExt;
++use tokio::io::BufReader;
++use tokio::io::Lines;
++use tokio::process::Child;
++use tokio::process::ChildStdin;
++use tokio::process::ChildStdout;
++use tokio::process::Command;
++use tokio::sync::mpsc;
++use tokio::sync::oneshot;
++use tokio::time::timeout;
++use tracing::warn;
++
++use crate::AppServerEvent;
++use crate::RequestResult;
++use crate::SHUTDOWN_TIMEOUT;
++
++use super::INITIALIZE_TIMEOUT;
++use super::RemoteAppServerClient;
++use super::RemoteClientCommand;
++use super::app_server_event_from_notification;
++use super::deliver_event;
++use super::jsonrpc_notification_from_client_notification;
++use super::jsonrpc_request_from_client_request;
++
++const MAX_JSONL_MESSAGE_SIZE: usize = 128 << 20;
++const CHILD_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
++
++pub(super) async fn connect_stdio_process(
++    channel_capacity: usize,
++    program: String,
++    args: Vec<String>,
++    initialize_params: InitializeParams,
++) -> IoResult<RemoteAppServerClient> {
++    if program.trim().is_empty() {
++        return Err(IoError::new(
++            ErrorKind::InvalidInput,
++            "DSHX stdio app-server program must not be empty",
++        ));
++    }
++
++    let endpoint = format!("stdio-process:{program}");
++    let mut command = Command::new(&program);
++    command
++        .args(&args)
++        .stdin(Stdio::piped())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::inherit())
++        .kill_on_drop(true);
++
++    let mut child = command.spawn().map_err(|err| {
++        IoError::new(
++            err.kind(),
++            format!("failed to spawn DSHX stdio app server `{program}`: {err}"),
++        )
++    })?;
++    let mut stdin = child.stdin.take().ok_or_else(|| {
++        IoError::other(format!("DSHX stdio app server `{program}` has no stdin pipe"))
++    })?;
++    let stdout = child.stdout.take().ok_or_else(|| {
++        IoError::other(format!("DSHX stdio app server `{program}` has no stdout pipe"))
++    })?;
++    let mut lines = BufReader::new(stdout).lines();
++
++    let (pending_events, server_version, codex_home) = initialize_stdio_process(
++        &mut stdin,
++        &mut lines,
++        &endpoint,
++        initialize_params,
++    )
++    .await
++    .inspect_err(|_| {
++        let _ = child.start_kill();
++    })?;
++
++    let (command_tx, mut command_rx) =
++        mpsc::channel::<RemoteClientCommand>(channel_capacity.max(1));
++    let (event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
++
++    let worker_handle = tokio::spawn(async move {
++        let mut pending_requests =
++            HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
++        let mut worker_exit_error: Option<(ErrorKind, String)> = None;
++
++        loop {
++            tokio::select! {
++                command = command_rx.recv() => {
++                    let Some(command) = command else {
++                        break;
++                    };
++                    match command {
++                        RemoteClientCommand::Request { request, response_tx } => {
++                            let request_id = request.id.clone();
++                            if pending_requests.contains_key(&request_id) {
++                                let _ = response_tx.send(Err(IoError::new(
++                                    ErrorKind::InvalidInput,
++                                    format!("duplicate stdio app-server request id `{request_id}`"),
++                                )));
++                                continue;
++                            }
++                            pending_requests.insert(request_id.clone(), response_tx);
++                            if let Err(err) = write_jsonrpc_line(
++                                &mut stdin,
++                                JSONRPCMessage::Request(*request),
++                                &endpoint,
++                            ).await {
++                                let message = format!("DSHX stdio app server write failed: {err}");
++                                if let Some(response_tx) = pending_requests.remove(&request_id) {
++                                    let _ = response_tx.send(Err(IoError::new(err.kind(), err.to_string())));
++                                }
++                                let _ = deliver_event(
++                                    &event_tx,
++                                    AppServerEvent::Disconnected { message: message.clone() },
++                                );
++                                worker_exit_error = Some((ErrorKind::BrokenPipe, message));
++                                break;
++                            }
++                        }
++                        RemoteClientCommand::Notify { notification, response_tx } => {
++                            let result = write_jsonrpc_line(
++                                &mut stdin,
++                                JSONRPCMessage::Notification(
++                                    jsonrpc_notification_from_client_notification(notification),
++                                ),
++                                &endpoint,
++                            ).await;
++                            let _ = response_tx.send(result);
++                        }
++                        RemoteClientCommand::ResolveServerRequest {
++                            request_id,
++                            result,
++                            response_tx,
++                        } => {
++                            let result = write_jsonrpc_line(
++                                &mut stdin,
++                                JSONRPCMessage::Response(JSONRPCResponse {
++                                    id: request_id,
++                                    result,
++                                }),
++                                &endpoint,
++                            ).await;
++                            let _ = response_tx.send(result);
++                        }
++                        RemoteClientCommand::RejectServerRequest {
++                            request_id,
++                            error,
++                            response_tx,
++                        } => {
++                            let result = write_jsonrpc_line(
++                                &mut stdin,
++                                JSONRPCMessage::Error(JSONRPCError {
++                                    error,
++                                    id: request_id,
++                                }),
++                                &endpoint,
++                            ).await;
++                            let _ = response_tx.send(result);
++                        }
++                        RemoteClientCommand::Shutdown { response_tx } => {
++                            let result = stdin.shutdown().await;
++                            let _ = response_tx.send(result);
++                            break;
++                        }
++                    }
++                }
++                message = read_jsonrpc_line(&mut lines, &endpoint) => {
++                    match message {
++                        Ok(Some(JSONRPCMessage::Response(response))) => {
++                            if let Some(response_tx) = pending_requests.remove(&response.id) {
++                                let _ = response_tx.send(Ok(Ok(response.result)));
++                            }
++                        }
++                        Ok(Some(JSONRPCMessage::Error(error))) => {
++                            if let Some(response_tx) = pending_requests.remove(&error.id) {
++                                let _ = response_tx.send(Ok(Err(error.error)));
++                            }
++                        }
++                        Ok(Some(JSONRPCMessage::Notification(notification))) => {
++                            if let Some(event) = app_server_event_from_notification(notification)
++                                && let Err(err) = deliver_event(&event_tx, event)
++                            {
++                                warn!(%err, "failed to deliver DSHX stdio app-server event");
++                                break;
++                            }
++                        }
++                        Ok(Some(JSONRPCMessage::Request(request))) => {
++                            let request_id = request.id.clone();
++                            let method = request.method.clone();
++                            match ServerRequest::try_from(request) {
++                                Ok(request) => {
++                                    if let Err(err) = deliver_event(
++                                        &event_tx,
++                                        AppServerEvent::ServerRequest(Box::new(request)),
++                                    ) {
++                                        warn!(%err, "failed to deliver DSHX stdio server request");
++                                        break;
++                                    }
++                                }
++                                Err(err) => {
++                                    warn!(%err, method, "rejecting unknown DSHX stdio app-server request");
++                                    if let Err(reject_err) = write_jsonrpc_line(
++                                        &mut stdin,
++                                        JSONRPCMessage::Error(JSONRPCError {
++                                            error: JSONRPCErrorError {
++                                                code: -32601,
++                                                message: format!("unsupported DSHX app-server request `{method}`"),
++                                                data: None,
++                                            },
++                                            id: request_id,
++                                        }),
++                                        &endpoint,
++                                    ).await {
++                                        let message = format!("DSHX stdio app server write failed: {reject_err}");
++                                        let _ = deliver_event(
++                                            &event_tx,
++                                            AppServerEvent::Disconnected { message: message.clone() },
++                                        );
++                                        worker_exit_error = Some((ErrorKind::BrokenPipe, message));
++                                        break;
++                                    }
++                                }
++                            }
++                        }
++                        Ok(None) => {
++                            let message = "DSHX stdio app server closed stdout".to_string();
++                            let _ = deliver_event(
++                                &event_tx,
++                                AppServerEvent::Disconnected { message: message.clone() },
++                            );
++                            worker_exit_error = Some((ErrorKind::UnexpectedEof, message));
++                            break;
++                        }
++                        Err(err) => {
++                            let message = format!("DSHX stdio app server transport failed: {err}");
++                            let _ = deliver_event(
++                                &event_tx,
++                                AppServerEvent::Disconnected { message: message.clone() },
++                            );
++                            worker_exit_error = Some((err.kind(), message));
++                            break;
++                        }
++                    }
++                }
++            }
++        }
++
++        let _ = stdin.shutdown().await;
++        reap_child(&mut child).await;
++
++        let (err_kind, err_message) = worker_exit_error.unwrap_or_else(|| {
++            (
++                ErrorKind::BrokenPipe,
++                "DSHX stdio app-server worker channel is closed".to_string(),
++            )
++        });
++        for (_, response_tx) in pending_requests {
++            let _ = response_tx.send(Err(IoError::new(err_kind, err_message.clone())));
++        }
++    });
++
++    Ok(RemoteAppServerClient {
++        command_tx,
++        event_rx,
++        pending_events: pending_events.into(),
++        server_version,
++        codex_home,
++        worker_handle,
++    })
++}
++
++async fn initialize_stdio_process(
++    stdin: &mut ChildStdin,
++    lines: &mut Lines<BufReader<ChildStdout>>,
++    endpoint: &str,
++    params: InitializeParams,
++) -> IoResult<(Vec<AppServerEvent>, Option<String>, Option<String>)> {
++    let initialize_request_id = RequestId::String("initialize".to_string());
++    let mut pending_events = Vec::new();
++    let mut server_version = None;
++    let mut codex_home = None;
++
++    write_jsonrpc_line(
++        stdin,
++        JSONRPCMessage::Request(jsonrpc_request_from_client_request(
++            ClientRequest::Initialize {
++                request_id: initialize_request_id.clone(),
++                params,
++            },
++        )),
++        endpoint,
++    ).await?;
++
++    timeout(INITIALIZE_TIMEOUT, async {
++        loop {
++            let Some(message) = read_jsonrpc_line(lines, endpoint).await? else {
++                break Err(IoError::new(
++                    ErrorKind::UnexpectedEof,
++                    format!("DSHX stdio app server `{endpoint}` closed during initialize"),
++                ));
++            };
++            match message {
++                JSONRPCMessage::Response(response) if response.id == initialize_request_id => {
++                    server_version = response
++                        .result
++                        .get("userAgent")
++                        .and_then(serde_json::Value::as_str)
++                        .and_then(|user_agent| {
++                            let (_, rest) = user_agent.split_once('/')?;
++                            rest.split_whitespace().next().map(str::to_string)
++                        });
++                    codex_home = response
++                        .result
++                        .get("codexHome")
++                        .and_then(serde_json::Value::as_str)
++                        .filter(|value| !value.is_empty())
++                        .map(str::to_string);
++                    break Ok(());
++                }
++                JSONRPCMessage::Error(error) if error.id == initialize_request_id => {
++                    break Err(IoError::other(format!(
++                        "DSHX stdio app server rejected initialize: {}",
++                        error.error.message
++                    )));
++                }
++                JSONRPCMessage::Notification(notification) => {
++                    if let Some(event) = app_server_event_from_notification(notification) {
++                        pending_events.push(event);
++                    }
++                }
++                JSONRPCMessage::Request(request) => {
++                    let request_id = request.id.clone();
++                    let method = request.method.clone();
++                    match ServerRequest::try_from(request) {
++                        Ok(request) => pending_events.push(
++                            AppServerEvent::ServerRequest(Box::new(request)),
++                        ),
++                        Err(err) => {
++                            warn!(%err, method, "rejecting unknown DSHX request during initialize");
++                            write_jsonrpc_line(
++                                stdin,
++                                JSONRPCMessage::Error(JSONRPCError {
++                                    error: JSONRPCErrorError {
++                                        code: -32601,
++                                        message: format!("unsupported DSHX app-server request `{method}`"),
++                                        data: None,
++                                    },
++                                    id: request_id,
++                                }),
++                                endpoint,
++                            ).await?;
++                        }
++                    }
++                }
++                JSONRPCMessage::Response(_) | JSONRPCMessage::Error(_) => {}
++            }
++        }
++    }).await.map_err(|_| {
++        IoError::new(
++            ErrorKind::TimedOut,
++            format!("timed out waiting for DSHX stdio initialize response from `{endpoint}`"),
++        )
++    })??;
++
++    write_jsonrpc_line(
++        stdin,
++        JSONRPCMessage::Notification(jsonrpc_notification_from_client_notification(
++            ClientNotification::Initialized,
++        )),
++        endpoint,
++    ).await?;
++
++    Ok((pending_events, server_version, codex_home))
++}
++
++async fn write_jsonrpc_line(
++    stdin: &mut ChildStdin,
++    message: JSONRPCMessage,
++    endpoint: &str,
++) -> IoResult<()> {
++    let mut payload = serde_json::to_vec(&message).map_err(|err| {
++        IoError::new(
++            ErrorKind::InvalidData,
++            format!("failed to serialize JSON-RPC for `{endpoint}`: {err}"),
++        )
++    })?;
++    payload.push(b'\n');
++    stdin.write_all(&payload).await.map_err(|err| {
++        IoError::new(
++            err.kind(),
++            format!("failed writing JSON-RPC to `{endpoint}`: {err}"),
++        )
++    })?;
++    stdin.flush().await.map_err(|err| {
++        IoError::new(
++            err.kind(),
++            format!("failed flushing JSON-RPC to `{endpoint}`: {err}"),
++        )
++    })
++}
++
++async fn read_jsonrpc_line(
++    lines: &mut Lines<BufReader<ChildStdout>>,
++    endpoint: &str,
++) -> IoResult<Option<JSONRPCMessage>> {
++    loop {
++        let Some(line) = lines.next_line().await.map_err(|err| {
++            IoError::new(
++                err.kind(),
++                format!("failed reading JSON-RPC from `{endpoint}`: {err}"),
++            )
++        })? else {
++            return Ok(None);
++        };
++        if line.trim().is_empty() {
++            continue;
++        }
++        if line.len() > MAX_JSONL_MESSAGE_SIZE {
++            return Err(IoError::new(
++                ErrorKind::InvalidData,
++                format!("DSHX stdio app server sent an oversized JSON-RPC message"),
++            ));
++        }
++        return serde_json::from_str::<JSONRPCMessage>(&line)
++            .map(Some)
++            .map_err(|err| {
++                IoError::new(
++                    ErrorKind::InvalidData,
++                    format!("DSHX stdio app server sent invalid JSON-RPC: {err}"),
++                )
++            });
++    }
++}
++
++async fn reap_child(child: &mut Child) {
++    if timeout(CHILD_EXIT_TIMEOUT, child.wait()).await.is_ok() {
++        return;
++    }
++    let _ = child.kill().await;
++    let _ = timeout(SHUTDOWN_TIMEOUT, child.wait()).await;
++}
