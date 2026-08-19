@@ -27,7 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install
+      - name: Install frozen dependency graph
+        run: npm ci
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
       - run: npm test
@@ -62,7 +63,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
+      - name: Install frozen dependency graph
+        run: npm ci
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
       - name: Boot and dispose official DeepSeek Harness composition
@@ -195,7 +197,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          npm install
+          npm ci
           node scripts/verify-dsh-closure.mjs
           python3 -m pip install --user pexpect
           python3 test/tui_smoke.py
