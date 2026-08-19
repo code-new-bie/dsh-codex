@@ -1,0 +1,34 @@
+name: Windows TUI Smoke
+
+on:
+  push:
+    branches: [main, 'work/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-tui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conpty:
+    name: Windows ConPTY / pinned Codex TUI
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install DSHX runtime dependencies
+        run: npm install
+      - name: Build pinned Codex TUI
+        shell: pwsh
+        run: ./scripts/build-codex-tui.ps1
+      - name: Install test-only ConPTY bridge
+        shell: pwsh
+        run: npm install --no-save --package-lock=false node-pty@1.1.0
+      - name: Exercise real TUI through Windows ConPTY
+        run: node test/tui_smoke_windows.mjs
