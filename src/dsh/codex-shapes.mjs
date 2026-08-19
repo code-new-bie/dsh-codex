@@ -159,6 +159,7 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
   }
   return {
     id: String(meta.id),
+    extra: null,
     sessionId: String(meta.id),
     forkedFromId: meta.parentSession ? String(meta.parentSession) : null,
     parentThreadId: meta.origin === 'subagent' && meta.parentSession ? String(meta.parentSession) : null,
@@ -167,6 +168,7 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
     section: null,
     sectionEnteredAt: null,
     projectId: null,
+    historyMode: 'paginated',
     modelProvider: config.provider ?? 'dsh',
     createdAt,
     updatedAt: seconds(lastTime, createdAt),
@@ -176,6 +178,7 @@ export function dshThreadFromSnapshot({ meta, events = [], model, turns = [], lo
     cwd: meta.cwd ?? process.cwd(),
     cliVersion,
     source: sourceForHeader(meta),
+    canAcceptDirectInput: loaded ? true : null,
     threadSource: null,
     agentNickname: null,
     agentRole: null,
