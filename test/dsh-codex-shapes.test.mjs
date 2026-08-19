@@ -73,7 +73,7 @@ test('persisted SessionHeader and request header project to a not-loaded Codex t
   assert.equal(thread.cwd, '/work');
 });
 
-test('history projection includes only direct human input and stable assistant/tool items', () => {
+test('history projection includes only direct human input and stable assistant/tool/reasoning items', () => {
   const definitions = {
     shell: {
       presentCall: () => ({ card: 'terminal', title: 'echo ok', cwd: '/work' }),
@@ -124,7 +124,13 @@ test('history projection includes only direct human input and stable assistant/t
           data: {
             turn: 1,
             step: 1,
-            message: { id: 'a1', content: [{ type: 'text', text: 'done' }] }
+            message: {
+              id: 'a1',
+              content: [
+                { type: 'reasoning', text: 'checked the command result' },
+                { type: 'text', text: 'done' }
+              ]
+            }
           }
         },
         { type: 'turn/end', time: 1_700_000_000_050, data: { turn: 1, reason: { kind: 'completed' } } }
@@ -134,8 +140,14 @@ test('history projection includes only direct human input and stable assistant/t
   const turns = dshTurnsFromSession({ ctx: agent.ctx, agent });
   assert.equal(turns.length, 1);
   assert.equal(turns[0].status, 'completed');
-  assert.deepEqual(turns[0].items.map((item) => item.type), ['userMessage', 'commandExecution', 'agentMessage']);
+  assert.deepEqual(turns[0].items.map((item) => item.type), [
+    'userMessage',
+    'commandExecution',
+    'reasoning',
+    'agentMessage'
+  ]);
   assert.equal(turns[0].items[0].content[0].text, 'run it');
   assert.equal(turns[0].items[1].aggregatedOutput, 'ok\n');
-  assert.equal(turns[0].items[2].text, 'done');
+  assert.deepEqual(turns[0].items[2].content, ['checked the command result']);
+  assert.equal(turns[0].items[3].text, 'done');
 });
