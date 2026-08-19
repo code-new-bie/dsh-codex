@@ -13,6 +13,7 @@
     "test": "node --test",
     "test:protocol": "node --test test/protocol.test.mjs test/wire.test.mjs",
     "test:dsh": "node --test test/dsh-*.test.mjs",
+    "verify:release-deps": "node scripts/verify-dsh-closure.mjs . package-lock.json",
     "stub": "node ./bin/dshx-stub-server.mjs",
     "dev": "node ./bin/dshx.mjs"
   },
