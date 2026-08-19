@@ -32,13 +32,10 @@ function copy(relative) {
   fs.cpSync(from, to, { recursive: true });
 }
 
-// Keep the platform package closure intentionally simple and auditable: ship
-// the whole DSHX presentation source tree plus its tiny Cordis root config.
-// This avoids release-only missing-import bugs while still keeping DSH itself
-// an upstream npm dependency rather than vendoring its runtime.
+// Ship only DSHX presentation code. DeepSeek Harness profile/plugin state lives
+// under $DSH_HOME and remains owned by the official @deepseek-ai/dsh runtime.
 copy('bin/dshx.mjs');
 copy('src');
-copy('config');
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
 copy('upstream/DSH_COMMIT');
@@ -66,7 +63,7 @@ const packageJson = {
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
-  files: ['bin', 'src', 'config', 'dist/bin', 'upstream', 'LICENSE', 'NOTICE', 'npm-shrinkwrap.json']
+  files: ['bin', 'src', 'dist/bin', 'upstream', 'LICENSE', 'NOTICE', 'npm-shrinkwrap.json']
 };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
