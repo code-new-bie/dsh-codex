@@ -7,6 +7,7 @@ import tempfile
 import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROMPT = "smoke 中文 输入 from pty"
 
 binary = ROOT / "dist" / "bin" / "dshx-tui"
 if not binary.exists():
@@ -39,13 +40,16 @@ with tempfile.TemporaryDirectory(prefix="dshx-codex-home-") as codex_home:
     try:
         child.expect("DeepSeek Harness")
         transcript.append(child.before + child.after)
-        child.send("smoke from pty\r")
+        # Resize after the first render to exercise Codex's real terminal resize
+        # path before submitting a CJK prompt through the composer.
+        child.setwinsize(40, 100)
+        child.send(PROMPT + "\r")
         child.expect("DSHX protocol stub received:")
         transcript.append(child.before + child.after)
-        child.expect("smoke from pty")
+        child.expect(PROMPT)
         transcript.append(child.before + child.after)
     except Exception:
         transcript.append(child.before or "")
-        raise AssertionError("Pinned DSHX stdio TUI smoke failed. Transcript:\n" + "".join(transcript))
+        raise AssertionError("Pinned DSHX stdio/CJK/resize TUI smoke failed. Transcript:\n" + "".join(transcript))
     finally:
         child.close(force=True)
