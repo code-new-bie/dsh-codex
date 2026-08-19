@@ -21,6 +21,7 @@ function breakdown(usage = {}) {
 function usageSamples(events = []) {
   const byStep = new Map();
   let last = null;
+  let lastTurn = null;
   for (const event of events) {
     const data = event?.data;
     if (!Number.isInteger(data?.turn) || !Number.isInteger(data?.step)) continue;
@@ -34,8 +35,9 @@ function usageSamples(events = []) {
     const sample = { ...usage };
     byStep.set(`${data.turn}:${data.step}`, sample);
     last = sample;
+    lastTurn = data.turn;
   }
-  return { byStep, last };
+  return { byStep, last, lastTurn };
 }
 
 function reasoningTotal(events = []) {
@@ -87,6 +89,11 @@ export function codexThreadTokenUsage({ ctx, session }) {
   };
 }
 
+export function latestTokenUsageTurnId(session) {
+  const { lastTurn } = usageSamples(session?.events ?? []);
+  return Number.isInteger(lastTurn) ? `dsh-turn-${lastTurn}` : null;
+}
+
 export function tokenUsageNotification({ ctx, session, threadId, turnId }) {
   const tokenUsage = codexThreadTokenUsage({ ctx, session });
   if (!tokenUsage || !threadId || !turnId) return null;
@@ -94,6 +101,11 @@ export function tokenUsageNotification({ ctx, session, threadId, turnId }) {
     method: 'thread/tokenUsage/updated',
     params: { threadId, turnId, tokenUsage }
   };
+}
+
+export function persistedTokenUsageNotification({ ctx, session, threadId }) {
+  const turnId = latestTokenUsageTurnId(session);
+  return tokenUsageNotification({ ctx, session, threadId, turnId });
 }
 
 export const tokenUsageInternals = {
