@@ -14,6 +14,12 @@ function visibleText(content) {
     .join('');
 }
 
+function visibleReasoning(content) {
+  return (content ?? [])
+    .filter((block) => block?.type === 'reasoning' && typeof block.text === 'string')
+    .map((block) => block.text);
+}
+
 function latestRequestConfig(events) {
   for (let index = (events?.length ?? 0) - 1; index >= 0; index -= 1) {
     const event = events[index];
@@ -228,14 +234,26 @@ export function dshTurnsFromSession({ ctx, agent, diagnostics = () => {} }) {
         const turn = turns.get(event.data?.turn);
         const message = event.data?.message;
         if (!turn || !message) break;
-        turn.items.push({
-          type: 'agentMessage',
-          id: String(message.id ?? `dsh-assistant-${event.data.turn}-${event.data.step}`),
-          text: visibleText(message.content),
-          phase: null,
-          memoryCitation: null,
-          delivery: null
-        });
+        const reasoning = visibleReasoning(message.content);
+        if (reasoning.length > 0) {
+          turn.items.push({
+            type: 'reasoning',
+            id: `dsh-reasoning-${event.data.turn}-${event.data.step}`,
+            summary: [],
+            content: reasoning
+          });
+        }
+        const text = visibleText(message.content);
+        if (text.length > 0) {
+          turn.items.push({
+            type: 'agentMessage',
+            id: String(message.id ?? `dsh-assistant-${event.data.turn}-${event.data.step}`),
+            text,
+            phase: null,
+            memoryCitation: null,
+            delivery: null
+          });
+        }
         break;
       }
       case 'tool/call': {
@@ -293,5 +311,6 @@ export const internals = {
   DEFAULT_REASONING_SENTINEL,
   latestRequestConfig,
   firstHumanPreview,
-  inputFromDshMessage
+  inputFromDshMessage,
+  visibleReasoning
 };
