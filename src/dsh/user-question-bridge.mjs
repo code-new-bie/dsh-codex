@@ -38,19 +38,22 @@ function dshAnswer(question, response) {
 /**
  * UI provider for the official DSH `ctx.userQuestions` seam.
  *
- * `locate(request)` correlates the question to an already-projected DSH tool
- * item. The provider owns no tool behavior and no durable answers; it blocks
- * only on the TUI server-request and returns the user's structured answer back
- * to the official DSH service.
+ * DSH's public AskUserQuestionRequest deliberately has no tool call id. The
+ * bridge therefore asks its owner for a PRESENTATION interaction location; a
+ * Codex client may attach the dialog to a synthetic UI-only item for the live
+ * DSH turn instead of guessing which parallel tool call caused the question.
+ * No question/answer semantics or durable state are owned here.
  */
 export class DshUserQuestionBridge {
-  constructor({ ctx, broker, locate, diagnostics = () => {} }) {
+  constructor({ ctx, broker, locate, complete = () => {}, diagnostics = () => {} }) {
     if (!ctx || typeof ctx.get !== 'function') throw new Error('DshUserQuestionBridge requires a Cordis Context');
     if (!broker) throw new Error('DshUserQuestionBridge requires a UiRequestBroker');
     if (typeof locate !== 'function') throw new Error('DshUserQuestionBridge requires locate(request)');
+    if (typeof complete !== 'function') throw new Error('DshUserQuestionBridge complete must be a function');
     this.ctx = ctx;
     this.broker = broker;
     this.locate = locate;
+    this.complete = complete;
     this.diagnostics = diagnostics;
     this.disposeProvider = requireService(ctx, 'userQuestions').registerProvider({
       ask: (request) => this.ask(request)
@@ -61,9 +64,9 @@ export class DshUserQuestionBridge {
     if (request.questions.some((question) => question.multiSelect === true)) {
       throw new Error('DSHX pinned Codex TUI does not yet represent DSH multi-select questions faithfully');
     }
-    const location = this.locate(request);
+    const location = await this.locate(request);
     if (!location?.threadId || !location?.turnId || !location?.itemId) {
-      throw new Error('DSHX could not correlate the DSH user question to a projected tool item');
+      throw new Error('DSHX could not open a Codex presentation item for the DSH user question');
     }
 
     try {
@@ -79,9 +82,14 @@ export class DshUserQuestionBridge {
         },
         { signal: request.signal }
       );
-      return { answers: request.questions.map((question) => dshAnswer(question, response)) };
+      const answer = { answers: request.questions.map((question) => dshAnswer(question, response)) };
+      await this.complete(location, { status: 'completed', answer });
+      return answer;
     } catch (error) {
       this.diagnostics(error instanceof Error ? error.message : String(error));
+      try { await this.complete(location, { status: 'failed', error }); } catch (completeError) {
+        this.diagnostics(completeError instanceof Error ? completeError.message : String(completeError));
+      }
       throw error;
     }
   }
