@@ -116,6 +116,27 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     };
   }
 
+  directController(threadId, operation) {
+    const controller = this.controllers.get(String(threadId ?? ''));
+    if (!controller) throw new Error(`Thread is not resumed in DSHX: ${String(threadId ?? '')}`);
+    if (isDshSubagent(controller.agent)) {
+      throw new Error(`DSHX refuses ${operation} on a DSH subagent; child runtime control remains owned by ctx.subagents`);
+    }
+    return controller;
+  }
+
+  async interruptSubagent(controller) {
+    const parentSessionId = controller.agent.session.header?.parentSession;
+    if (parentSessionId == null) throw new Error('DSH subagent is missing durable parentSession authority');
+    const subagents = this.ctx.get('subagents');
+    if (!subagents?.interrupt) throw new Error('DSHX requires DSH service: subagents.interrupt');
+    await subagents.interrupt(String(controller.agent.id), {
+      kind: 'user',
+      parentSessionId: String(parentSessionId)
+    });
+    return { result: {} };
+  }
+
   installController(handle) {
     const controller = super.installController(handle);
     const threadId = String(controller.agent.id);
@@ -148,12 +169,18 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
         return this.threadSettingsUpdatePresentation(params);
       case 'thread/shellCommand':
         return this.threadShellCommand(params);
+      case 'thread/compact/start':
+        this.directController(params?.threadId, 'direct compaction');
+        return super.dispatch(method, params);
       case 'turn/start':
       case 'turn/steer':
         return this.richUserTurn(method, params);
-      case 'turn/interrupt':
+      case 'turn/interrupt': {
         if (this.userShell().interrupt(params?.threadId, params?.turnId)) return { result: {} };
+        const controller = this.controllers.get(String(params?.threadId ?? ''));
+        if (controller && isDshSubagent(controller.agent)) return this.interruptSubagent(controller);
         return super.dispatch(method, params);
+      }
       case 'thread/unsubscribe': {
         const threadId = String(params?.threadId ?? '');
         this.userShell().abortThread(threadId, 'thread unsubscribed');
@@ -175,6 +202,9 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     const threadId = String(params.threadId ?? '');
     const controller = this.controllers.get(threadId);
     if (!controller) return super.dispatch(method, params);
+    if (isDshSubagent(controller.agent)) {
+      throw new Error(`DSHX refuses ${method} on a DSH subagent; send/steer authority remains owned by ctx.subagents`);
+    }
     const content = await codexInputToDshContent(this.ctx, params.input ?? []);
     const clear = controller.prepareUserContent(content);
     try {
@@ -234,9 +264,12 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
   }
 
   async threadSettingsUpdatePresentation(params = {}) {
-    if (params.collaborationMode == null) return super.threadSettingsUpdate(params);
     const threadId = String(params.threadId ?? '');
     const controller = this.controllers.get(threadId);
+    if (controller && isDshSubagent(controller.agent)) {
+      throw new Error('DSHX refuses direct model/permission/plan changes on a DSH subagent; composition remains DSH-owned');
+    }
+    if (params.collaborationMode == null) return super.threadSettingsUpdate(params);
     if (!controller) throw new Error(`Thread is not resumed in DSHX: ${threadId}`);
     const active = codexPlanTarget(params.collaborationMode);
     const { collaborationMode: _ignored, ...ordinary } = params;
@@ -291,9 +324,7 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
   }
 
   threadShellCommand(params = {}) {
-    const threadId = String(params.threadId ?? '');
-    const controller = this.controllers.get(threadId);
-    if (!controller) throw new Error(`Thread is not resumed in DSHX: ${threadId}`);
+    const controller = this.directController(params.threadId, 'direct shell execution');
     return this.userShell().start(controller, params.command);
   }
 
