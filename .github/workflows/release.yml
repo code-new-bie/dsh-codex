@@ -30,6 +30,35 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Enforce stable 1.0 promotion ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "v1.0.0" ]]; then
+            exit 0
+          fi
+          for issue in 12 13 14 15; do
+            state="$(gh issue view "$issue" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+            if [[ "$state" != "CLOSED" ]]; then
+              echo "stable 1.0 is blocked: release-gate issue #$issue is $state" >&2
+              exit 1
+            fi
+          done
+          merged="$(gh pr view 11 --repo "$GITHUB_REPOSITORY" --json mergedAt --jq '.mergedAt != null')"
+          if [[ "$merged" != "true" ]]; then
+            echo 'stable 1.0 is blocked: PR #11 has not been merged' >&2
+            exit 1
+          fi
+          relation="$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...main" --jq .status)"
+          case "$relation" in
+            identical|ahead) ;;
+            *)
+              echo "stable 1.0 is blocked: tag commit $GITHUB_SHA is not contained in main (compare status: $relation)" >&2
+              exit 1
+              ;;
+          esac
       - name: Resolve release version (Unix)
         if: runner.os != 'Windows'
         shell: bash
