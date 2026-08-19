@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bash "$ROOT/scripts/materialize-codex.sh"
+node "$ROOT/scripts/verify-slash-contract.mjs"
 CODEX_DIR="${DSHX_CODEX_DIR:-$ROOT/.upstream/codex}"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.build/codex}"
 OUT_DIR="${DSHX_TUI_OUT_DIR:-$ROOT/dist/bin}"
