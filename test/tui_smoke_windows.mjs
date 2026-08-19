@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import * as pty from 'node-pty';
-import { startProtocolStubServer } from '../src/server.mjs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
+import pty from 'node-pty';
 
-const TOKEN = 'dshx-conpty-smoke-token-0123456789abcdefghijklmnopqrstuvwxyz';
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function stripTerminalControl(value) {
   return value
@@ -24,64 +26,109 @@ function stringEnv(extra = {}) {
 }
 
 function waitForOutput(state, needle, timeoutMs = 30_000) {
-  const started = Date.now();
+  if (stripTerminalControl(state.output).includes(needle)) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const poll = setInterval(() => {
-      const transcript = stripTerminalControl(state.output);
-      if (transcript.includes(needle)) {
-        clearInterval(poll);
-        resolve();
-        return;
-      }
-      if (Date.now() - started < timeoutMs) return;
-      clearInterval(poll);
-      reject(new Error(`Timed out waiting for ${JSON.stringify(needle)}. Transcript:\n${transcript}`));
-    }, 50);
+    const timer = setTimeout(() => {
+      dispose.dispose();
+      reject(new Error(`Timed out waiting for ${JSON.stringify(needle)}. Transcript:\n${stripTerminalControl(state.output)}`));
+    }, timeoutMs);
+    const dispose = state.term.onData((chunk) => {
+      state.output += chunk;
+      if (!stripTerminalControl(state.output).includes(needle)) return;
+      clearTimeout(timer);
+      dispose.dispose();
+      resolve();
+    });
   });
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function firstLine(stream, child, stderrText, timeoutMs = 15_000) {
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => fail(new Error(`Timed out waiting for local IPC stub: ${stderrText()}`)), timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off('error', onError);
+      child.off('exit', onExit);
+    };
+    const fail = (error) => {
+      cleanup();
+      lines.close();
+      reject(error);
+    };
+    const onError = (error) => fail(error);
+    const onExit = (code, signal) => fail(new Error(`local IPC stub exited before ready (${signal ?? code ?? 'unknown'}): ${stderrText()}`));
+    child.once('error', onError);
+    child.once('exit', onExit);
+    lines.once('line', (line) => {
+      cleanup();
+      lines.close();
+      resolve(line);
+    });
+  });
+}
+
+async function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  const timer = new Promise((resolve) => setTimeout(resolve, 5_000, 'timeout'));
+  if (await Promise.race([exited.then(() => 'exit'), timer]) === 'timeout') {
+    child.kill('SIGKILL');
+    await exited;
+  }
 }
 
 if (process.platform !== 'win32') {
   throw new Error('tui_smoke_windows.mjs must run on Windows/ConPTY');
 }
 
-const binary = path.join(process.cwd(), 'dist', 'bin', 'dshx-tui.exe');
+const binary = path.join(ROOT, 'dist', 'bin', 'dshx-tui.exe');
+const bridge = path.join(ROOT, 'dist', 'bin', 'dshx-ipc-bridge.exe');
 if (!fs.existsSync(binary)) throw new Error(`built DSHX TUI missing: ${binary}`);
+if (!fs.existsSync(bridge)) throw new Error(`built DSHX IPC bridge missing: ${bridge}`);
 
 const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-conpty-home-'));
-const server = await startProtocolStubServer({ token: TOKEN, eventDelayMs: 8 });
+let server;
+let serverStderr = '';
 let term;
-let dataDisposable;
 try {
+  server = spawn(process.execPath, [path.join(ROOT, 'bin', 'dshx-stub-local.mjs')], {
+    cwd: ROOT,
+    env: stringEnv({ DSHX_IPC_BRIDGE_BIN: bridge }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
+  });
+  server.stderr.on('data', (chunk) => {
+    serverStderr = `${serverStderr}${chunk.toString('utf8')}`.slice(-8192);
+  });
+  const endpoint = await firstLine(server.stdout, server, () => serverStderr);
+  if (!endpoint.startsWith('unix://')) {
+    throw new Error(`local IPC stub returned non-local endpoint ${JSON.stringify(endpoint)}: ${serverStderr}`);
+  }
+
   term = pty.spawn(binary, [], {
     name: 'xterm-256color',
     cols: 120,
     rows: 32,
-    cwd: process.cwd(),
+    cwd: ROOT,
     env: stringEnv({
       TERM: 'xterm-256color',
       CODEX_HOME: codexHome,
-      DSHX_APP_SERVER_ENDPOINT: server.url,
-      DSHX_APP_SERVER_TOKEN: TOKEN
+      DSHX_APP_SERVER_ENDPOINT: endpoint
     })
   });
-  const state = { output: '' };
-  dataDisposable = term.onData((chunk) => { state.output += chunk; });
+  const state = { term, output: '' };
+  term.onData((chunk) => { state.output += chunk; });
 
   await waitForOutput(state, 'DeepSeek Harness');
-  term.write('smoke from conpty\r');
+  const prompt = '你好，DSHX ConPTY';
+  term.write(`${prompt}\r`);
   await waitForOutput(state, 'DSHX protocol stub received:');
-  await waitForOutput(state, 'smoke from conpty');
-  process.stdout.write('Windows ConPTY DSHX TUI smoke passed\n');
+  await waitForOutput(state, prompt);
+  process.stdout.write('Windows ConPTY DSHX local-IPC + CJK smoke passed\n');
 } finally {
-  dataDisposable?.dispose?.();
   try { term?.kill(); } catch {}
-  // Let the killed TUI close its WebSocket before asking ws.Server.close() to
-  // wait for all clients; this keeps failures bounded on busy hosted runners.
-  await sleep(100);
-  await server.close();
+  await stopChild(server);
   fs.rmSync(codexHome, { recursive: true, force: true });
 }

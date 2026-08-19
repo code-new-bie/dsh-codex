@@ -1,125 +1,81 @@
 # DSH public capability matrix
 
-This document is a guardrail for the DSHX adapter. Every Codex-facing behavior must map to an **official DeepSeek Harness public API/event**. If no suitable public capability exists at the pinned DSH commit, DSHX marks the surface unsupported or degrades the presentation; it does not implement a replacement runtime.
+This document is a guardrail for the DSHX adapter. Every Codex-facing behavior must map to an **official DeepSeek Harness public API/event**. If no suitable public capability exists at the supported DSH release, DSHX marks the surface unsupported or degrades the presentation; it does not implement a replacement runtime.
 
-Pinned DSH commit: `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`
+Supported DSH package line: `0.1.0-rc.8`.
+Pinned DSH source reference: `141eb6fef83422698aef7a981029e843e8161534`.
 
 ## Core interaction mapping
 
 | Codex/TUI need | Official DSH source | DSHX responsibility | Status |
 |---|---|---|---|
-| Start a conversation | `ctx.agents.create(...)` | Project result into `thread/start` / Thread UI | Verified |
-| Resume a conversation | `ctx.agents.resume({ resumeSessionId })` | Project resumed Session into Thread/resume UI | Verified |
-| Live agent lookup | `ctx.agents.get(id)`, `list()`, `roots()` | Presentation/navigation only | Verified |
-| User follow-up | `Agent.followup(message)` | Convert composer input to DSH user message | Verified |
-| Steering while running | `Agent.steer(message)` | Forward active-turn steering from composer | Verified |
-| Cancel / Ctrl+C | `Agent.cancel(cause, options?)` | Map TUI interrupt intent, never invent policy | Verified |
-| Wait for quiescence | `Agent.whenIdle()` | Drive UI busy/idle convergence | Verified |
-| Agent status | `agent/status` event and `Agent.status` | Render active/idle state | Verified |
-| Durable transcript source | `Session` append-only event log | Project only; never create a second transcript DB | Verified |
-| Session event feed | `session/event` | Translate exposed event vocabulary to TUI items | Verified |
-| User message | `user/message` | Render transcript/input history | Verified |
-| Token/chunk streaming | `assistant/chunk` | Convert exposed chunks to agent-message/reasoning deltas | Verified |
-| Final assistant message | `assistant/message` | Finalize message item and usage presentation | Verified |
-| Tool invocation | `tool/call` | Render matching Codex tool/shell/file cell where semantics are known | Verified |
-| Tool result | `tool/result` | Render result/meta; do not execute the tool in DSHX | Verified |
-| File contextual diff | `tool/result.meta` when provided by producing tool | Present diff/card only | Verified capability seam |
-| Plan / todo | `todo/write` | Project whole-list snapshot into plan UI | Verified |
-| Provider/model/reasoning route | `request/header` | Populate status/model presentation and resume projection | Verified |
-| Context-window route metadata | `request/context` | Feed context footer when present | Verified |
-| Flush durability | `session/flush` | Await/request through official lifecycle only when required | Verified |
-| Session listing | `ctx.sessionPersistence.list()` / `listSnapshots()` | Populate resume picker | Verified |
-| Session inspection | `ctx.sessionPersistence.inspect(id)` | Read immutable history for resume/details | Verified |
+| Start a conversation | `ctx.agents.create(...)` | Project result into `thread/start` / Thread UI | Implemented + tested |
+| Resume a conversation | `ctx.agents.resume({ resumeSessionId })` | Project resumed Session into Thread/resume UI | Implemented + tested |
+| Live agent lookup | `ctx.agents.get(id)`, `list()`, `roots()` | Presentation/navigation only | Implemented + tested |
+| User follow-up | `Agent.followup(message)` | Convert composer input to official DSH user content | Implemented + tested |
+| Steering while running | `Agent.steer(message)` | Forward active-turn steering from composer | Implemented + tested |
+| Cancel / Ctrl+C | `Agent.cancel(cause, options?)` | Map TUI interrupt intent; never invent policy | Implemented + tested |
+| Wait for quiescence | `Agent.whenIdle()` | Drive UI busy/idle convergence | Implemented + tested |
+| Agent/subagent status | `agent/status`, `agent/created`, `agent/disposed` | Render thread active/idle/not-loaded state | Implemented + tested |
+| Durable transcript source | `Session` append-only event log | Project only; never create a second transcript DB | Implemented + guarded |
+| Session event feed | `session/event` | Translate exposed event vocabulary to TUI items | Implemented + tested |
+| User message | `user/message` | Render transcript/input history | Implemented + tested |
+| Token/chunk streaming | `assistant/chunk` | Convert visible/reasoning chunks to Codex deltas | Implemented + tested |
+| Final assistant message | `assistant/message` | Finalize message/reasoning items | Implemented + tested |
+| Tool invocation/result | `tool/call`, `tool/result` | Render matching Codex tool/shell/file/diff cells; never execute locally | Implemented + tested |
+| File contextual diff | producing tool result/meta | Present diff/card only | Implemented where DSH emits faithful metadata |
+| Plan / todo | `todo/write`, `planMode` | Project plan list/mode into Codex presentation | Implemented + tested |
+| Provider/model catalog | `ctx.llm.listProviders()`, `listModels()`, `resolveModelInfo()` | Populate `/model` using public registry | Implemented + tested |
+| Model/reasoning validation | `ctx.llm.resolveCallConfig()` + official model-selection service | Validate/apply picker changes through DSH | Implemented + tested |
+| Persisted route metadata | `request/header` | Restore model/reasoning presentation on resume | Implemented + tested |
+| Context/token usage | `request/context` + persisted session usage | Feed footer/usage projection when exposed | Implemented + tested |
+| Session listing/inspection | `ctx.sessionPersistence.list()`, `inspect()` | Resume picker/history hydration | Implemented + tested |
 | Session persistence/crash repair | `ctx.sessionPersistence` implementations | **None** — DSH owns durability and repair | Upstream-owned |
-| Permission preset list/current | `ctx.permissionPresets.names`, `optionOf()`, `current(session.events)` | Populate Codex-style permissions selector | Verified |
-| Permission preset switch | `ctx.permissionPresets.set(session, name)` | Delegate selected value; do not write sandbox/approval events ourselves | Verified |
-| Effective file sandbox | `ctx.sandboxPolicy.resolve({ session })` | Present DSH enforcement as an external sandbox | Verified |
-| Effective approval policy | `ctx.approval.overrideOf(session)` + `ctx.approval.config.policy` | Map `ask → on-request`, `never → never` | Verified |
-| Interactive approval request | scoped `approval/request` waterfall | Present only when Codex has a faithful UI for that DSH tool; otherwise delegate/fail closed | Verified |
-| Approval audit | `approval/asked` / `approval/decided` | Read/render if useful; never use audit events as the answer channel | Verified |
+| Paginated history | persisted Session events | Convert immutable events into Codex turn/item pages | Implemented + tested |
+| Permission preset list/current | `ctx.permissionPresets` | Populate Codex-style permissions selector | Implemented + tested |
+| Permission preset switch | `ctx.permissionPresets.set(...)` | Delegate selected value; do not write policy events ourselves | Implemented + tested |
+| Effective sandbox/approval state | DSH sandbox/approval services | Present DSH enforcement without inventing Codex semantics | Implemented + tested |
+| Interactive approval request | scoped `approval/request` waterfall | Present only faithful one-shot decisions; fail closed otherwise | Implemented + tested |
+| Ask user | `ctx.userQuestions.registerProvider(...)` | Present Codex request-user-input overlay and return DSH answer | Implemented for faithful single-select/free-text cases |
+| Skills discovery | official DSH skills registry/provider surface | Adapt current registry snapshot to `skills/list` | Implemented + tested |
+| Session fork | Host API `sessions.fork` | Select DSH event boundary and delegate durable fork | Implemented + ownership guarded |
+| Manual compaction | official DSH `/compact` command | Invoke through DSH command service; render compaction events | Implemented + ownership guarded |
+| Shell execution | official DSH `tools.execute` with owning Agent | Map Codex shell request/result to DSH tool execution | Implemented + ownership guarded |
+| Workspace diff command | official DSH `tools.execute` with owning Agent | Use DSH execution, then present result | Implemented + ownership guarded |
+| Subagent lifecycle | official `subagents` service + agent lifecycle events | Present child threads/status; delegate interrupt authority | Implemented + fail-closed authority tests |
 
 ## Permission semantic notes
 
-DSH sandbox mode governs **filesystem effects only**. Its public sandbox contract explicitly states that network and process visibility are outside the sandbox vocabulary. Codex's legacy `SandboxPolicy` combines filesystem and network presentation fields, so DSHX must not claim that a DSH confined session is a Codex-native `workspaceWrite`/`readOnly` policy with invented network semantics.
+DSH sandbox mode governs the semantics exposed by DSH; DSHX must not invent network/process guarantees that are absent from that public contract. Where Codex's legacy sandbox shape is broader than DSH's vocabulary, DSHX presents an external sandbox plus the actual DSH permission preset rather than falsely claiming Codex-native enforcement.
 
-DSHX therefore projects confined DSH modes as Codex `externalSandbox` for the legacy field and keeps the actual DSH preset name/options as the user-facing source of truth. `danger-full-access` has an exact legacy Codex representation and may be projected directly.
+DSH approval outcomes are closed and fail-closed. Only an explicit DSH grant is projected as approval. Codex's session-wide approval actions are hidden when no faithful DSH equivalent exists. Unknown plugin-tool approvals are not guessed into shell/file semantics; unclaimed requests remain unavailable/denied according to DSH policy.
 
-DSH approval outcomes are closed and fail-closed:
+## Session durability and restart semantics
 
-```text
-allowed-once
-rejected
-cancelled
-unavailable
-```
+DSHX keeps no durable transcript. Resume calls `ctx.agents.resume(...)`, history is read from DSH persistence, and the latest persisted `request/header` wins over the current machine default when restoring model/reasoning presentation. DSHX does not repair, replay or rewrite Session state after a crash.
 
-Only `allowed-once` is a grant. Codex's `acceptForSession` has **no faithful DSH equivalent** and must not be offered for DSH-backed approvals. The TUI needs a narrow backend-aware patch that keeps one-shot accept / decline / cancel while hiding session-wide approval. Unknown plugin-tool approvals are not misclassified as shell/file approvals; an unclaimed request naturally falls through to DSH's `unavailable` outcome.
+## Known deliberate capability gaps
 
-## DSH events observed at the pinned commit
+These are not shadow-implemented:
 
-The session event vocabulary already contains the primitives needed for a Codex-like coding transcript:
+- **DSH multi-select user questions:** the pinned Codex request-user-input presentation does not provide a faithful multi-select contract in the current adapter, so DSHX rejects that request instead of silently changing its semantics.
+- **Codex-specific review/apps/plugins/hooks/memory/personality surfaces:** hidden where the supported DSH release has no faithful public equivalent wired into DSHX.
+- **Jobs/workflows UI:** DSH may own these capabilities, but a stable terminal presentation contract has not yet been adopted; this is a presentation-only future surface.
+- **Ephemeral Codex fork / goal-continuation semantics:** not mapped onto durable DSH Session forks.
+- **Codex service-tier and reasoning-summary/personality thread settings:** rejected because there is no equivalent public DSH setting to project.
 
-```text
-turn/start
-turn/end
-step/start
-step/end
-user/message
-assistant/chunk
-assistant/message
-tool/call
-tool/result
-todo/write
-request/header
-request/context
-approval/asked
-approval/decided
-approval/policy
-sandbox/mode
-permission/preset
-```
-
-The adapter must treat the vocabulary as merge-extensible. Unknown plugin events are valid DSH events; DSHX may ignore explicitly ignorable presentation events but must not reinterpret required unknown events as known capabilities.
-
-## Explicit non-ownership
-
-DSHX does not own any implementation behind these surfaces:
-
-```text
-ctx.agents
-Agent loop
-Session / SessionPersistence
-ctx.llm adapters and routing
-tool execution
-sandbox
-approval policy
-permission presets
-skills
-subagents
-plugins
-jobs / workflows
-crash recovery
-```
-
-A mapping row describes where DSHX **reads, calls or presents an upstream capability**. It does not grant permission to duplicate that capability locally.
+A visible Codex command is kept only when its semantics are backed by DSH or are purely local TUI presentation. Unsupported runtime-owned commands are hidden rather than routed to Codex core.
 
 ## Capability fallback rule
 
 For every UI feature:
 
-1. Detect whether the pinned/runtime DSH composition exposes a faithful public capability.
+1. Detect whether the supported DSH composition exposes a faithful public capability.
 2. If yes, adapt it narrowly into the Codex TUI surface.
-3. If the semantics are only partially representable, show an explicit reduced/unsupported state.
-4. If representing it would weaken permissions or durability semantics, fail closed.
+3. If semantics are only partially representable, show an explicit reduced/unsupported state.
+4. If representing it would weaken permissions, authority or durability semantics, fail closed.
 5. Never solve a missing upstream capability by adding a shadow runtime to `dsh-codex`.
 
-## Research still required
+## Release evidence
 
-The following surfaces need further public-API verification before implementation:
-
-- Enumerating the current DSH model/provider catalog for `/model` without relying on private registry fields.
-- Ask-user event/tool presentation seam and cancellation semantics.
-- Exact built-in DSH tool-name/meta contracts needed to specialize generic tool cells into Codex shell/file/diff cells.
-- Skills/subagents/jobs/plugin UI capability discovery for later milestones.
-
-Those are adapter research tasks, not invitations to implement the capabilities in DSHX.
+This matrix describes implementation/ownership, not release-candidate pass status. The exact candidate must still satisfy `docs/RELEASE-READINESS.md`, including CI, packaged local-IPC checks and manual Windows Terminal/CJK/IME parity acceptance.

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'work/**']
+    branches: [main, 'work/**', 'agent/**']
   pull_request:
 
 permissions:
@@ -80,11 +80,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Build pinned Codex TUI (Unix)
+      - name: Build pinned Codex TUI + local IPC bridge (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: bash scripts/build-codex-tui.sh
-      - name: Build pinned Codex TUI (Windows)
+      - name: Build pinned Codex TUI + local IPC bridge (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build-codex-tui.ps1
@@ -100,10 +100,18 @@ jobs:
           SLASH=.upstream/codex/codex-rs/tui/src/slash_command.rs
           STARTUP=.upstream/codex/codex-rs/tui/src/app/startup.rs
           EVENT=.upstream/codex/codex-rs/tui/src/app/event_dispatch.rs
+          BRIDGE=.upstream/codex/codex-rs/stdio-to-uds/src/dshx_ipc_bridge.rs
           grep -q 'DSHX_APP_SERVER_ENDPOINT is required' "$MAIN"
-          grep -q 'DSHX_APP_SERVER_TOKEN is required' "$MAIN"
+          grep -q 'DSHX production launcher forbids TCP WebSocket transport' "$MAIN"
+          ! grep -q 'DSHX_APP_SERVER_TOKEN' "$MAIN"
+          grep -q 'RemoteAppServerEndpoint::UnixSocket' "$MAIN"
           grep -q 'Some(dshx_endpoint)' "$MAIN"
           grep -q 'DSHX_RESUME_MODE' "$MAIN"
+          grep -q 'UnixListener' "$BRIDGE"
+          grep -q 'UnixStream' "$BRIDGE"
+          grep -q 'dshxBridge.*ready' "$BRIDGE"
+          test -x dist/bin/dshx-ipc-bridge
+          dist/bin/dshx-ipc-bridge --check
           grep -q 'DeepSeek Harness' .upstream/codex/codex-rs/tui/src/history_cell/session.rs
           grep -q 'fn dshx_backend' .upstream/codex/codex-rs/tui/src/bottom_pane/approval_overlay.rs
           grep -q 'fn dshx_backend' .upstream/codex/codex-rs/tui/src/chatwidget/permission_popups.rs
@@ -115,6 +123,14 @@ jobs:
           grep -q 'dshx resume' "$APP"
           grep -q 'if crate::dshx_backend()' "$SLASH"
           grep -q 'DeepSeek Harness' "$SLASH"
+          ! grep -q 'WebSocketServer' src/dsh/local-server.mjs
+          grep -q 'unix://' src/dsh/local-server.mjs
+          grep -q 'local-uds-via-stdio-bridge' scripts/package-platform.mjs
+          node - <<'NODE'
+          const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
+          if (pkg.dependencies?.ws) throw new Error('ws must not be a production dependency');
+          if (!pkg.devDependencies?.ws) throw new Error('development protocol stub still requires ws');
+          NODE
           python3 - <<'PY'
           from pathlib import Path
           text = Path('.upstream/codex/codex-rs/tui/src/slash_command.rs').read_text()
@@ -130,9 +146,18 @@ jobs:
         run: |
           $main = Get-Content .upstream\codex\codex-rs\tui\src\main.rs -Raw
           if (-not $main.Contains('DSHX_APP_SERVER_ENDPOINT is required')) { throw 'missing DSHX endpoint guard' }
-          if (-not $main.Contains('DSHX_APP_SERVER_TOKEN is required')) { throw 'missing DSHX token guard' }
+          if (-not $main.Contains('DSHX production launcher forbids TCP WebSocket transport')) { throw 'TCP WebSocket production guard missing' }
+          if ($main.Contains('DSHX_APP_SERVER_TOKEN')) { throw 'legacy TCP bearer-token transport is still present' }
+          if (-not $main.Contains('RemoteAppServerEndpoint::UnixSocket')) { throw 'local Unix socket transport missing' }
           if (-not $main.Contains('Some(dshx_endpoint)')) { throw 'Codex core fallback was not removed' }
           if (-not $main.Contains('DSHX_RESUME_MODE')) { throw 'DSHX resume patch is missing' }
+          $bridge = Get-Content .upstream\codex\codex-rs\stdio-to-uds\src\dshx_ipc_bridge.rs -Raw
+          if (-not $bridge.Contains('UnixListener')) { throw 'cross-platform Codex UDS bridge is missing' }
+          if (-not $bridge.Contains('UnixStream')) { throw 'IPC data-plane self-check is missing' }
+          if (-not $bridge.Contains('dshxBridge')) { throw 'IPC bridge readiness protocol is missing' }
+          if (-not (Test-Path dist\bin\dshx-ipc-bridge.exe)) { throw 'packaged IPC bridge is missing' }
+          & .\dist\bin\dshx-ipc-bridge.exe --check
+          if ($LASTEXITCODE -ne 0) { throw 'packaged IPC bridge self-check failed' }
           $header = Get-Content .upstream\codex\codex-rs\tui\src\history_cell\session.rs -Raw
           if (-not $header.Contains('DeepSeek Harness')) { throw 'DSHX branding patch is missing' }
           $approval = Get-Content .upstream\codex\codex-rs\tui\src\bottom_pane\approval_overlay.rs -Raw
@@ -152,12 +177,20 @@ jobs:
           $slash = Get-Content .upstream\codex\codex-rs\tui\src\slash_command.rs -Raw
           if (-not $slash.Contains('if crate::dshx_backend()')) { throw 'DSHX slash capability patch is missing' }
           if (-not $slash.Contains('DeepSeek Harness')) { throw 'DSHX slash branding is missing' }
+          $localServer = Get-Content src\dsh\local-server.mjs -Raw
+          if ($localServer.Contains('WebSocketServer')) { throw 'production adapter still opens a TCP WebSocket server' }
+          if (-not $localServer.Contains('unix://')) { throw 'production adapter does not publish a local Unix endpoint' }
+          $packager = Get-Content scripts\package-platform.mjs -Raw
+          if (-not $packager.Contains('local-uds-via-stdio-bridge')) { throw 'release metadata does not pin local IPC transport' }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($null -ne $pkg.dependencies.ws) { throw 'ws must not be a production dependency' }
+          if ($null -eq $pkg.devDependencies.ws) { throw 'development protocol stub still requires ws' }
           $hiddenStart = $slash.IndexOf('if crate::dshx_backend()')
           $hiddenEnd = $slash.IndexOf('return false;', $hiddenStart)
           if ($hiddenStart -lt 0 -or $hiddenEnd -lt 0) { throw 'DSHX slash hidden block not found' }
           $hidden = $slash.Substring($hiddenStart, $hiddenEnd - $hiddenStart)
           if ($hidden.Contains('SlashCommand::Diff')) { throw '/diff must remain visible in DSHX now that command/exec is DSH-backed' }
-      - name: Real pinned TUI PTY smoke
+      - name: Real pinned TUI local-IPC PTY smoke
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -165,9 +198,9 @@ jobs:
           node scripts/verify-dsh-closure.mjs
           python3 -m pip install --user pexpect
           python3 test/tui_smoke.py
-      - name: Build installable platform tarball
-        shell: bash
+      - name: Build installable platform tarball (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: node scripts/package-platform.mjs
       - name: Build installable platform tarball (Windows)
         if: runner.os == 'Windows'
@@ -211,16 +244,12 @@ jobs:
         run: |
           grep -q "must not grow into an agent framework" docs/ARCHITECTURE.md
           grep -q "DeepSeek Harness remains an upstream dependency" docs/TEAM.md
-      - name: Assert runtime composition remains profile-owned by DSH
+      - name: Assert production runtime remains official DSH composition
         shell: bash
         run: |
-          grep -q "loadProfile" src/dsh/runtime-boot.mjs
-          grep -q "healProfilesModuleFallback" src/dsh/runtime-boot.mjs
-          grep -q "loadOptionalPatches" src/dsh/runtime-boot.mjs
-          grep -q "DEFAULT_PROFILE = 'headless'" src/dsh/runtime-boot.mjs
-          grep -q "headless-startup" src/dsh/runtime-boot.mjs
-          grep -q "headless-runner" src/dsh/runtime-boot.mjs
-          ! grep -q "OFFICIAL_BUNDLES" src/dsh/runtime-boot.mjs
+          grep -q "dsh-base" src/dsh/runtime-boot.mjs
+          grep -q "dsh-headless" src/dsh/runtime-boot.mjs
+          grep -q "startup: { disabled: true }" src/dsh/runtime-boot.mjs
       - name: Assert shell and workspace execution remain DSH-owned
         shell: bash
         run: |
@@ -240,3 +269,9 @@ jobs:
           ! grep -q "compactNow" src/dsh/product-adapter.mjs
           ! grep -E "seedLength|parentSession|dshForkSeed" src/dsh/agent-driver.mjs src/dsh/product-adapter.mjs
           ! grep -q "fork(sourceAgent" src/dsh/agent-driver.mjs
+      - name: Assert production transport is local IPC, not TCP WebSocket
+        shell: bash
+        run: |
+          ! grep -q "WebSocketServer" src/dsh/local-server.mjs
+          grep -q "unix://" src/dsh/local-server.mjs
+          grep -q "dshx-ipc-bridge" scripts/build-codex-tui.sh

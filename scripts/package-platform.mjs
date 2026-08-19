@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
@@ -11,10 +10,15 @@ const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 
 const version = process.env.DSHX_VERSION || rootPackage.version;
 const platform = process.platform;
 const arch = process.arch;
-const exe = platform === 'win32' ? 'dshx-tui.exe' : 'dshx-tui';
-const tuiSource = path.join(root, 'dist', 'bin', exe);
+const tuiExe = platform === 'win32' ? 'dshx-tui.exe' : 'dshx-tui';
+const bridgeExe = platform === 'win32' ? 'dshx-ipc-bridge.exe' : 'dshx-ipc-bridge';
+const tuiSource = path.join(root, 'dist', 'bin', tuiExe);
+const bridgeSource = path.join(root, 'dist', 'bin', bridgeExe);
 if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
+}
+if (!fs.existsSync(bridgeSource)) {
+  throw new Error(`Missing built IPC bridge at ${bridgeSource}; build the pinned Codex transport bridge first`);
 }
 
 const releaseRoot = path.join(root, '.release');
@@ -32,18 +36,25 @@ function copy(relative) {
   fs.cpSync(from, to, { recursive: true });
 }
 
-// Ship only DSHX presentation code. DeepSeek Harness profile/plugin state lives
-// under $DSH_HOME and remains owned by the official @deepseek-ai/dsh runtime.
+// Ship only the production presentation closure. Early TCP/WebSocket protocol
+// stubs remain source-tree development fixtures and are deliberately excluded
+// from installable artifacts.
 copy('bin/dshx.mjs');
-copy('src');
+copy('src/dsh');
+copy('src/protocol');
+copy('config');
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
 copy('upstream/DSH_COMMIT');
 copy('upstream/patches/codex');
 
 fs.mkdirSync(path.join(stage, 'dist', 'bin'), { recursive: true });
-fs.copyFileSync(tuiSource, path.join(stage, 'dist', 'bin', exe));
-if (platform !== 'win32') fs.chmodSync(path.join(stage, 'dist', 'bin', exe), 0o755);
+fs.copyFileSync(tuiSource, path.join(stage, 'dist', 'bin', tuiExe));
+fs.copyFileSync(bridgeSource, path.join(stage, 'dist', 'bin', bridgeExe));
+if (platform !== 'win32') {
+  fs.chmodSync(path.join(stage, 'dist', 'bin', tuiExe), 0o755);
+  fs.chmodSync(path.join(stage, 'dist', 'bin', bridgeExe), 0o755);
+}
 
 const codexLicense = path.join(root, '.upstream', 'codex', 'LICENSE');
 if (!fs.existsSync(codexLicense)) {
@@ -63,12 +74,22 @@ const packageJson = {
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
-  files: ['bin', 'src', 'dist/bin', 'upstream', 'LICENSE', 'NOTICE', 'npm-shrinkwrap.json']
+  files: [
+    'bin/dshx.mjs',
+    'src/dsh',
+    'src/protocol',
+    'config',
+    'dist/bin',
+    'upstream',
+    'LICENSE',
+    'NOTICE',
+    'npm-shrinkwrap.json'
+  ]
 };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
-// Static release-closure check before npm pack. Every local relative import in
-// shipped JavaScript must resolve inside the staged package.
+// Every relative import in the release closure must resolve inside the staged
+// package. This prevents a source-tree-only helper from leaking into 1.0.
 for (const file of walkJs(stage)) {
   const source = fs.readFileSync(file, 'utf8');
   for (const match of source.matchAll(/(?:from\s+|import\s*)['\"](\.{1,2}\/[^'\"]+)['\"]/g)) {
@@ -77,11 +98,6 @@ for (const file of walkJs(stage)) {
   }
 }
 
-// A published DSH release is version-synchronized across @deepseek-ai/dsh-*.
-// Generate a shrinkwrap from the exact registry closure, then reject packaging
-// if npm selected any different DSH release through a peer/caret range. This
-// makes future upstream releases fail loudly until DSHX deliberately updates
-// its pin, rather than silently shipping a mixed Harness runtime.
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 execFileSync(npm, [
   'install',
@@ -112,6 +128,8 @@ if (path.resolve(sourceTarball) !== path.resolve(targetTarball)) {
   fs.renameSync(sourceTarball, targetTarball);
 }
 
+// Keep metadata deterministic for a given source/version/platform. Wall clock
+// and builder hostname belong in CI provenance, not the distributable sidecar.
 const metadata = {
   version,
   platform,
@@ -120,9 +138,8 @@ const metadata = {
   dshVersion: rootPackage.dependencies['@deepseek-ai/dsh'],
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
-  tarball: path.basename(targetTarball),
-  builtAt: new Date().toISOString(),
-  host: os.hostname()
+  transport: 'local-uds-via-stdio-bridge',
+  tarball: path.basename(targetTarball)
 };
 fs.writeFileSync(`${targetTarball}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
 process.stdout.write(`${targetTarball}\n`);

@@ -1,73 +1,88 @@
 # Roadmap
 
-All milestones obey one ownership rule: **DSHX maintains the TUI, launcher and thin public-API adapter only. DeepSeek Harness capabilities remain upstream-owned.**
+All milestones obey one ownership rule: **DSHX maintains the TUI, launcher, transport and thin public-API adapter only. DeepSeek Harness capabilities remain upstream-owned.**
 
-## Milestone 0 — Codex TUI protocol proof
+Milestone status describes implementation progress. A 1.0 release requires the independent evidence in `RELEASE-READINESS.md`.
+
+## Milestone 0 — Codex TUI protocol proof — complete
 
 Goal: prove that the pinned Codex TUI can be driven without Codex's agent runtime.
 
-- Pin Codex and DSH upstream commits.
-- Implement a deterministic app-server-compatible development stub.
-- Support the TUI bootstrap requests: initialize, account/read, model/list, configRequirements/read and thread/start.
-- Support turn/start, agent-message streaming and turn/interrupt.
-- Expose a zero-argument development launcher: `dshx`.
-- Run the proof on Windows Terminal and Linux.
+Delivered:
 
-Exit gate: the pinned Codex TUI launches from `dshx`, accepts a user prompt and renders the deterministic streaming lifecycle through our protocol seam.
+- pinned Codex and DSH upstream references;
+- deterministic app-server-compatible development stub;
+- bootstrap/thread/turn/streaming/interrupt protocol proof;
+- zero-argument development launcher;
+- thin-fork patches proving the Codex TUI can run with DSHX as its backend.
 
-The WebSocket remote path is a development harness only and is removed from the production launch path later.
+The historical TCP/WebSocket path is retained only as a development fixture and is excluded from the production package.
 
-## Milestone 1 — Official DSH public-API adapter / daily coding loop
+## Milestone 1 — Official DSH public-API adapter / daily coding loop — implementation complete, RC evidence pending
 
-Replace the deterministic stub with calls to **official DeepSeek Harness public APIs/events only**.
+Delivered through official DSH public APIs/events:
 
-- Session start/resume/list projection.
-- Agent response streaming.
-- Shell/tool cells from exposed DSH events.
-- File change + unified diff from exposed DSH events.
-- Approval and ask-user presentation with DSH policy remaining authoritative.
-- Steering and reliable Ctrl+C through official DSH control APIs.
-- Model picker backed by official DSH model registry/public surface.
-- Context/token footer where DSH exposes the data.
+- session start/resume/list/history projection;
+- response + reasoning streaming;
+- specialized shell/tool/file/diff presentation where DSH exposes faithful semantics;
+- approval and ask-user presentation with DSH policy authoritative;
+- steering and Ctrl+C interrupt;
+- model/provider/reasoning picker backed by official DSH registry/resolution;
+- context/token/footer projection where DSH exposes the data;
+- skills discovery;
+- fork, compaction and subagent boundaries delegated to DSH-owned services;
+- fail-closed ownership tests preventing local execution/runtime duplication.
 
-Exit gate: a complete coding task can be performed without DSH WebUI and without implementing any DSH runtime capability in this repository.
+Exit gate: the exact release candidate must pass the automated daily-loop/PTY gates and real dogfooding; implementation alone does not declare the milestone release-green.
 
-## Milestone 2 — Codex UX parity
+## Milestone 2 — Codex UX parity — thin-fork parity implemented; manual terminal acceptance pending
 
-- Welcome screen parity.
-- Composer and slash command parity.
-- `/model`, `/permissions`, `/status`, `/review` behavior parity where DSH exposes matching semantics.
-- Resume picker parity using DSH session data.
-- Plan/reasoning cells where exposed by DSH.
-- Scroll/search/mouse/resize behavior.
-- Windows Terminal and CJK/IME regression tests.
+Implemented/inherited from the pinned Codex TUI:
 
-Exit gate: side-by-side comparison with the pinned Codex release passes the UX parity matrix. Unsupported DSH semantics are explicit, never silently emulated.
+- welcome screen, composer and slash-command interaction;
+- model and permission pickers;
+- resume picker using DSH session data;
+- approval and ask-user overlays;
+- tool/shell/diff/plan/reasoning cells;
+- steering/interrupt behavior;
+- Codex-native scroll, mouse and resize behavior;
+- status/footer rendering where DSH exposes data.
 
-## Milestone 3 — DSH capability surfaces (presentation only)
+Unsupported Codex runtime semantics are explicitly hidden/rejected rather than silently emulated. See `DSH-CAPABILITY-MATRIX.md`.
 
-Expose additional DSH capabilities **only when official DSH interfaces exist**:
+Exit gate still pending: side-by-side Windows Terminal + Chinese IME/CJK acceptance against the pinned Codex TUI using the exact generated release-candidate artifact.
 
-- Skills UI.
-- Subagent UI.
+## Milestone 3 — Additional DSH capability surfaces (presentation only) — partial
+
+Implemented where official seams are stable:
+
+- Skills discovery/UI feed.
+- Subagent thread/status presentation and DSH-owned interruption authority.
+
+Future presentation-only candidates:
+
 - Jobs/workflows UI.
-- Plugin diagnostics/configuration UI.
-- DSH-specific command namespace without disturbing Codex-compatible commands.
+- Plugin diagnostics/configuration UI where DSH exposes a stable product-facing seam.
+- Additional DSH-specific commands that do not disturb Codex-compatible commands.
 
-This milestone adds presentation and translation, not new runtime implementations.
+This milestone is not a blocker for the core 1.0 daily coding loop unless a listed capability is required by the final product acceptance matrix.
 
-## Milestone 4 — Production packaging and 1.0 gate
+## Milestone 4 — Production packaging and 1.0 gate — implementation complete, external validation pending
 
-- `dshx` zero-argument startup with no manual bridge/profile/remote command.
-- Pinned Codex TUI thin fork included in release artifacts; no separate Codex install required for normal use.
-- Supported local runtime integration; no production dependency on experimental WebSocket remote mode.
-- Versioned protocol/DSH compatibility contract.
-- Crash recovery and DSH session durability projection tests.
-- Security/approval fail-closed tests.
-- Windows/Linux/macOS release artifacts.
-- Reproducible CI builds and checksums.
-- `dshx doctor` diagnostics.
-- Codex/DSH upstream sync playbook.
-- Release-candidate dogfooding gate.
+Implemented:
 
-1.0 ships only when the daily coding loop, UX parity matrix, security checks and zero-argument `dshx` launch contract are green on supported platforms.
+- `dshx` zero-argument startup with no manual bridge/profile/remote command;
+- pinned Codex TUI included in platform release artifacts;
+- packaged cross-platform `dshx-ipc-bridge` using Codex `codex_uds`;
+- production Unix-socket transport with no TCP listener / bearer-token loopback dependency;
+- real local-IPC data-plane self-check in `dshx doctor`;
+- exact supported DSH release closure and compatibility gates;
+- DSH-owned session durability/resume projection tests;
+- approval/permission/subagent fail-closed tests;
+- Linux x64, Windows x64, macOS arm64 and macOS x64 release jobs;
+- clean-install artifact smoke and SHA-256 checksums;
+- Linux real pinned-TUI PTY smoke in CI **and tagged release workflow**;
+- Codex/DSH pin + patch-queue sync model;
+- explicit RC promotion checklist in `RELEASE-READINESS.md`.
+
+1.0 may ship only when the exact candidate has green CI/release evidence and the manual Windows Terminal/CJK/IME UX acceptance is recorded as passing.
