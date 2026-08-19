@@ -73,40 +73,6 @@ export class DshAgentDriver {
     });
   }
 
-  async fork(sourceAgent, {
-    sessionId = randomUUID(),
-    seed = sourceAgent?.session?.events ?? []
-  } = {}) {
-    if (!sourceAgent?.session) throw new Error('DSHX fork requires a live DSH source agent');
-    await this.settleComposition();
-    const agents = requireService(this.ctx, 'agents');
-    const sourceHeader = sourceAgent.session.header ?? {};
-    const sourceSelection = this.currentModel(sourceAgent);
-    const meta = {
-      ...(sourceHeader.cwd == null ? {} : { cwd: sourceHeader.cwd }),
-      parentSession: SessionId(String(sourceHeader.id ?? sourceAgent.id)),
-      seedLength: seed.length,
-      ...(sourceHeader.agentPreset == null ? {} : { agentPreset: sourceHeader.agentPreset })
-    };
-    const handle = await agents.create({
-      sessionId: SessionId(sessionId),
-      seed,
-      meta,
-      agentOptions: {
-        provider: sourceSelection.provider,
-        model: sourceSelection.model
-      },
-      setup: (agentCtx) => this.installSelection(agentCtx)
-    });
-    try {
-      await this.selectModel(handle.agent, sourceSelection);
-      return handle;
-    } catch (error) {
-      await handle.dispose?.();
-      throw error;
-    }
-  }
-
   async resume(sessionId) {
     await this.settleComposition();
     const agents = requireService(this.ctx, 'agents');
