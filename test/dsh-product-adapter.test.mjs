@@ -146,25 +146,50 @@ test('thread/settings/update maps Codex workspace profile to the DSH canonical p
   assert.deepEqual(result, { result: {} });
 });
 
-test('thread/settings/update delegates model and effort while tolerating Codex default collaboration metadata', async () => {
+test('thread/settings/update delegates model/effort and persists the DSH deployment default', async () => {
   const adapter = bareAdapter();
   const agent = { session: { header: { cwd: path.resolve('/workspace') } } };
   adapter.controllers.set('session-1', { agent });
   const modelCalls = [];
+  const saved = [];
+  adapter.ctx = {
+    get(name) {
+      if (name === 'agentDefaultModel') {
+        return { async saveSelection(selection) { saved.push(selection); } };
+      }
+      return undefined;
+    }
+  };
   adapter.applyModelOverride = async (receivedAgent, update) => {
     assert.equal(receivedAgent, agent);
     modelCalls.push(update);
+    return { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' };
   };
   adapter.applyStartPermissions = async () => { throw new Error('permission path should not run'); };
 
   const result = await adapter.threadSettingsUpdate({
     threadId: 'session-1',
-    model: 'dsh://deepseek/deepseek-chat',
+    model: 'dshx:opaque-model',
     effort: 'high',
     collaborationMode: { mode: 'default', settings: {} }
   });
-  assert.deepEqual(modelCalls, [{ model: 'dsh://deepseek/deepseek-chat', effort: 'high' }]);
+  assert.deepEqual(modelCalls, [{ model: 'dshx:opaque-model', effort: 'high' }]);
+  assert.deepEqual(saved, [{ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' }]);
   assert.deepEqual(result, { result: {} });
+});
+
+test('missing DSH settings provider does not invalidate the current session model switch', async () => {
+  const adapter = bareAdapter();
+  const diagnostics = [];
+  adapter.diagnostics = (message) => diagnostics.push(message);
+  const agent = { session: { header: { cwd: path.resolve('/workspace') } } };
+  adapter.controllers.set('session-1', { agent });
+  adapter.ctx = { get() { return undefined; } };
+  adapter.applyModelOverride = async () => ({ provider: 'deepseek', model: 'chat' });
+
+  const result = await adapter.threadSettingsUpdate({ threadId: 'session-1', effort: 'medium' });
+  assert.deepEqual(result, { result: {} });
+  assert.match(diagnostics.join('\n'), /deployment default was not persisted/);
 });
 
 test('thread/settings/update refuses unsupported Codex-only settings when they are the actual requested change', async () => {
