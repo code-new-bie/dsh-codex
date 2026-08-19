@@ -75,7 +75,7 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     return {
       ...response,
       runtimeWorkspaceRoots: [],
-      activePermissionProfile: id == null ? null : { id },
+      activePermissionProfile: id == null ? null : { id, extends: null },
       multiAgentMode: 'explicitRequestOnly',
       initialTurnsPage: null,
       turnsBackwardsCursor: null,
@@ -100,10 +100,12 @@ export class DshxProductAdapter extends DshAppServerAdapter {
   }
 
   async skillsList(params = {}) {
+    // Pinned Codex uses forceReload=true for its ordinary asynchronous startup
+    // catalog refresh. DSH provider invalidation is not a presentation-owned
+    // operation, so DSHX treats this bit as a request for a fresh authoritative
+    // registry snapshot rather than pretending to flush provider caches.
     if (params.forceReload === true) {
-      throw new Error(
-        'DSHX cannot honor Codex forceReload: DSH skill cache invalidation is provider-owned; retry after the DSH provider emits skills/change'
-      );
+      this.diagnostics('Codex requested skills forceReload; DSHX is reading the current DSH registry snapshot without overriding provider-owned cache policy');
     }
     const cwds = Array.isArray(params.cwds) && params.cwds.length > 0
       ? params.cwds.map((cwd) => path.resolve(cwd))
