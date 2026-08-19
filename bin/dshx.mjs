@@ -5,7 +5,6 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
 import { dshxRuntimeEntries } from '../src/dsh/runtime-boot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -13,7 +12,7 @@ const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const VERSION = PACKAGE.version;
 
 function usage() {
-  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
+  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n  The production TUI/adapter channel is a private JSONL stdio child process, not Codex remote WebSocket mode.\n`;
 }
 
 function packagedTuiBinary() {
@@ -24,6 +23,10 @@ function packagedTuiBinary() {
     path.join(ROOT, '.build', 'codex', 'release', process.platform === 'win32' ? 'codex-tui.exe' : 'codex-tui')
   ].filter(Boolean);
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+function packagedAdapterScript() {
+  return path.join(ROOT, 'bin', 'dshx-app-server.mjs');
 }
 
 function dshxTuiHome() {
@@ -48,6 +51,7 @@ function parseLaunchArgs(args) {
 
 function doctor() {
   const executable = packagedTuiBinary();
+  const adapterScript = packagedAdapterScript();
   const tuiCheck = executable && fs.existsSync(executable)
     ? spawnSync(executable, ['--version'], { encoding: 'utf8' })
     : { status: 127, stdout: '', stderr: '' };
@@ -77,6 +81,7 @@ function doctor() {
           : 'not found',
       tuiCheck.status === 0
     ],
+    ['Private stdio adapter', adapterScript, fs.existsSync(adapterScript)],
     ['DeepSeek Harness', runtimeDetail, runtimeOk],
     ['Presentation home', dshxTuiHome(), true]
   ];
@@ -125,6 +130,13 @@ async function run() {
     return;
   }
 
+  const adapterScript = packagedAdapterScript();
+  if (!fs.existsSync(adapterScript)) {
+    process.stderr.write(`dshx: packaged stdio adapter not found (${adapterScript})\n`);
+    process.exitCode = 127;
+    return;
+  }
+
   const tuiHome = dshxTuiHome();
   try {
     fs.mkdirSync(tuiHome, { recursive: true, mode: 0o700 });
@@ -134,55 +146,34 @@ async function run() {
     return;
   }
 
-  const debug = process.env.DSHX_DEBUG === '1';
-  const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
-  let local;
-  try {
-    local = await startDshxLocalServer({ cwd: process.cwd(), version: VERSION, log });
-  } catch (error) {
-    process.stderr.write(`dshx: failed to boot DeepSeek Harness: ${error instanceof Error ? error.message : error}\n`);
-    process.exitCode = 1;
-    return;
-  }
-
   const child = spawn(executable, launch.tuiArgs, {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      // Do not inherit CODEX_HOME: DSHX uses Codex code as a presentation
-      // component only and must not read/write the user's ordinary Codex state.
+      // DSHX uses Codex code only as a presentation component and must not
+      // read/write the user's ordinary Codex state.
       CODEX_HOME: tuiHome,
       ...launch.resumeEnv,
-      DSHX_APP_SERVER_ENDPOINT: local.url,
-      DSHX_APP_SERVER_TOKEN: local.token
+      DSHX_APP_SERVER_PROGRAM: process.execPath,
+      DSHX_APP_SERVER_SCRIPT: adapterScript
     },
     stdio: 'inherit',
     windowsHide: false
   });
 
-  let closing = false;
-  const close = async (exitCode) => {
-    if (closing) return;
-    closing = true;
-    try {
-      await local.close();
-    } catch (error) {
-      if (debug) process.stderr.write(`[dshx] shutdown: ${error instanceof Error ? error.message : error}\n`);
-    }
-    process.exitCode = exitCode;
-  };
-
-  child.on('error', async (error) => {
+  child.on('error', (error) => {
     process.stderr.write(`dshx: failed to launch pinned Codex TUI: ${error.message}\n`);
-    await close(127);
+    process.exitCode = 127;
   });
-  child.on('exit', async (code, signal) => {
-    if (signal && debug) process.stderr.write(`[dshx] TUI exited via ${signal}\n`);
-    await close(code ?? (signal ? 1 : 0));
+  child.on('exit', (code, signal) => {
+    if (signal && process.env.DSHX_DEBUG === '1') {
+      process.stderr.write(`[dshx] TUI exited via ${signal}\n`);
+    }
+    process.exitCode = code ?? (signal ? 1 : 0);
   });
 
-  // SIGTERM is a process-lifecycle signal. Do not intercept SIGINT: Ctrl+C is
-  // an in-TUI interaction used by Codex to interrupt the active DSH turn.
+  // SIGTERM is process lifecycle. Do not intercept SIGINT: Ctrl+C belongs to
+  // the TUI and is used to interrupt the active DSH turn.
   process.once('SIGTERM', () => {
     if (!child.killed) child.kill('SIGTERM');
   });
