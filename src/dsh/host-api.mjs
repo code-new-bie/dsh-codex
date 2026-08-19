@@ -12,6 +12,11 @@ function rpcError(error, fallback) {
   return new Error(fallback);
 }
 
+function value(response, fallback) {
+  if (!response?.result?.ok) throw rpcError(response?.result?.error, fallback);
+  return response.result.value;
+}
+
 /**
  * Very small façade over DSH's own transport-agnostic Host API.
  * Domain semantics stay in @deepseek-ai/dsh-host-apiproxy; DSHX only adapts
@@ -40,9 +45,17 @@ export class DshHostApi {
       sessionId,
       ...(atSeq == null ? {} : { atSeq })
     }));
-    if (!response?.result?.ok) {
-      throw rpcError(response?.result?.error, `DSH session fork failed for ${String(sessionId)}`);
-    }
-    return response.result.value;
+    return value(response, `DSH session fork failed for ${String(sessionId)}`);
+  }
+
+  async selectModel({ sessionId, provider, model, reasoningEffort } = {}) {
+    const response = await this.api.sessions.selectModel(this.request({
+      sessionId,
+      provider,
+      model,
+      ...(reasoningEffort == null ? {} : { reasoningEffort })
+    }));
+    const result = value(response, `DSH model selection failed for ${String(sessionId)}`);
+    return result?.selected ?? result;
   }
 }
