@@ -81,10 +81,6 @@ export class DshxProductAdapter extends DshAppServerAdapter {
   }
 
   accountUsageRead(_params = {}) {
-    // Codex's account/usage/read is a billing API (credits/USD estimates), not
-    // a generic token counter. DSH token/context accounting is surfaced through
-    // thread/tokenUsage/updated instead. Returning threadUsage:null tells the
-    // Codex UI that billing usage is unavailable without inventing zero cost.
     return {
       result: {
         summary: {
@@ -144,10 +140,6 @@ export class DshxProductAdapter extends DshAppServerAdapter {
   }
 
   async skillsList(params = {}) {
-    // Pinned Codex uses forceReload=true for its ordinary asynchronous startup
-    // catalog refresh. DSH provider invalidation is not a presentation-owned
-    // operation, so DSHX treats this bit as a request for a fresh authoritative
-    // registry snapshot rather than pretending to flush provider caches.
     if (params.forceReload === true) {
       this.diagnostics('Codex requested skills forceReload; DSHX is reading the current DSH registry snapshot without overriding provider-owned cache policy');
     }
@@ -188,9 +180,6 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         line: '/compact',
         signal: abortController.signal
       });
-      // A successful real compaction is rendered from DSH's durable
-      // compaction/* events. A no-op has no such event, so surface the official
-      // command text instead of leaving the user without feedback.
       if (execution.result?.sourceEventSeq == null && execution.result?.text) {
         this.warnThread(threadId, execution.result.text);
       }
@@ -280,11 +269,11 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     const childId = String(forked?.sessionId ?? '');
     if (!childId) throw new Error('DSH Host fork returned no child session id');
 
-    // DSH Host publishes the child Agent transactionally. DSHX attaches only a
-    // presentation controller and does not own the AgentHandle or inherited
-    // model/lineage/workspace semantics.
     const childAgent = this.driver.getLive(childId);
     if (!childAgent) throw new Error(`DSH Host fork did not publish child Agent ${childId}`);
+    this.driver.adoptExternalSelection(childAgent, {
+      select: (selection) => this.hostApi().selectModel({ sessionId: childId, ...selection })
+    });
     const controller = this.installController({ agent: childAgent, dispose: async () => {} });
     const result = this.threadResponse(controller.agent, {
       includeTurns: params.excludeTurns !== true
