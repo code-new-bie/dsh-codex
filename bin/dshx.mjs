@@ -170,6 +170,7 @@ async function run() {
   try {
     local = await startDshxLocalServer({
       cwd: process.cwd(),
+      home: tuiHome,
       version: VERSION,
       bridgeCommand: bridge,
       log
