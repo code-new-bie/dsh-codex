@@ -140,6 +140,30 @@ export class DshxProductAdapter extends DshAppServerAdapter {
     return { result: { data } };
   }
 
+  async threadResume(params = {}) {
+    if (!params.threadId) throw new Error('thread/resume requires threadId');
+    const threadId = String(params.threadId);
+    let controller = this.controllers.get(threadId);
+    if (!controller) {
+      const live = this.driver.getLive(threadId);
+      const handle = live
+        ? { agent: live, dispose: async () => {} }
+        : await this.driver.resume(threadId);
+      controller = this.installController(handle);
+    }
+    const agent = controller.agent;
+    if (params.cwd != null && path.resolve(params.cwd) !== path.resolve(agent.session.header?.cwd ?? this.cwd)) {
+      throw new Error('DSHX does not override a persisted DSH session cwd during resume');
+    }
+    await this.applyModelOverride(agent, params);
+    await this.applyStartPermissions(agent, params);
+    return {
+      result: this.threadResponse(agent, {
+        includeTurns: params.excludeTurns !== true
+      })
+    };
+  }
+
   historyController(threadId) {
     const controller = this.controllers.get(String(threadId ?? ''));
     if (!controller) {
