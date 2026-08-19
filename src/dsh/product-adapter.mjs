@@ -59,6 +59,8 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         return this.threadItemsList(params);
       case 'thread/settings/update':
         return this.threadSettingsUpdate(params);
+      case 'thread/unsubscribe':
+        return this.threadUnsubscribeWithStatus(params);
       case 'turn/steer':
         return this.turnSteer(params);
       default:
@@ -141,6 +143,18 @@ export class DshxProductAdapter extends DshAppServerAdapter {
         params,
         diagnostics: this.diagnostics
       })
+    };
+  }
+
+  async threadUnsubscribeWithStatus(params = {}) {
+    const threadId = String(params.threadId ?? '');
+    const subscribed = this.controllers.has(threadId);
+    const loaded = Boolean(this.driver.getLive(threadId));
+    await super.threadUnsubscribe(params);
+    return {
+      result: {
+        status: subscribed ? 'unsubscribed' : loaded ? 'notSubscribed' : 'notLoaded'
+      }
     };
   }
 
