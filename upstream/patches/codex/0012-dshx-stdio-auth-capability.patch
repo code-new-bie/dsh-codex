@@ -1,0 +1,11 @@
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -356,6 +356,7 @@ pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> boo
+             Url::parse(websocket_url).is_ok_and(|parsed| websocket_url_supports_auth_token(&parsed))
+         }
+         RemoteAppServerEndpoint::UnixSocket { .. } => false,
++        RemoteAppServerEndpoint::StdioProcess { .. } => false,
+     }
+ }
+ 
