@@ -9,10 +9,11 @@ function requireService(ctx, name) {
   return service;
 }
 
-function userMessage(text) {
+function userMessage(content) {
+  const blocks = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }];
   return createUserMessage({
     source: { kind: 'user' },
-    content: [{ type: 'text', text }]
+    content: blocks
   });
 }
 
@@ -98,8 +99,6 @@ export class DshAgentDriver {
       setup: (agentCtx) => this.installSelection(agentCtx)
     });
     try {
-      // The source may have a runtime-only picker selection newer than its last
-      // request/header. Preserve that exact public DSH selection in the fork.
       await this.selectModel(handle.agent, sourceSelection);
       return handle;
     } catch (error) {
@@ -193,8 +192,8 @@ export class DshAgentDriver {
     };
   }
 
-  followup(agent, text) { agent.followup(userMessage(text)); }
-  steer(agent, text) { agent.steer(userMessage(text)); }
+  followup(agent, content) { agent.followup(userMessage(content)); }
+  steer(agent, content) { agent.steer(userMessage(content)); }
   interrupt(agent, { keepInbox = false } = {}) { agent.cancel({ kind: 'user' }, { keepInbox }); }
   whenIdle(agent) { return agent.whenIdle(); }
   getLive(sessionId) { return requireService(this.ctx, 'agents').get(SessionId(sessionId)); }
