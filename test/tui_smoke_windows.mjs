@@ -5,6 +5,8 @@ import path from 'node:path';
 import process from 'node:process';
 import * as pty from 'node-pty';
 
+const PROMPT = 'smoke 中文 输入 from conpty';
+
 function stripTerminalControl(value) {
   return value
     .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
@@ -68,10 +70,13 @@ try {
   dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
   await waitForOutput(state, 'DeepSeek Harness');
-  term.write('smoke from conpty\r');
+  // ConPTY resize plus a real UTF-8 CJK prompt catches width/input regressions
+  // that ASCII-only protocol tests cannot see.
+  term.resize(100, 40);
+  term.write(`${PROMPT}\r`);
   await waitForOutput(state, 'DSHX protocol stub received:');
-  await waitForOutput(state, 'smoke from conpty');
-  process.stdout.write('Windows ConPTY DSHX stdio TUI smoke passed\n');
+  await waitForOutput(state, PROMPT);
+  process.stdout.write('Windows ConPTY DSHX stdio/CJK/resize smoke passed\n');
 } finally {
   dataDisposable?.dispose?.();
   try { term?.kill(); } catch {}
