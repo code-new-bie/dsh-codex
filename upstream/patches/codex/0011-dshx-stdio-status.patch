@@ -1,0 +1,13 @@
+diff --git a/codex-rs/tui/src/status/remote_connection.rs b/codex-rs/tui/src/status/remote_connection.rs
+--- a/codex-rs/tui/src/status/remote_connection.rs
++++ b/codex-rs/tui/src/status/remote_connection.rs
+@@ -27,6 +27,9 @@ pub(crate) fn remote_connection_status_value(
+         RemoteAppServerEndpoint::UnixSocket { socket_path } => {
+             format!("unix://{}", socket_path.display())
+         }
++        RemoteAppServerEndpoint::StdioProcess { .. } => {
++            "stdio://dshx".to_string()
++        }
+     };
+     let version = server_version
+         .map(|version| format!("v{version}"))
