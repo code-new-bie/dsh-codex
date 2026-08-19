@@ -23,8 +23,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install DSHX runtime dependencies
-        run: npm install
+      - name: Install DSHX runtime dependencies from frozen graph
+        run: npm ci
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
       - name: Build pinned Codex TUI + local IPC bridge
