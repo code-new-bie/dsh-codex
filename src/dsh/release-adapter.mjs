@@ -1,3 +1,4 @@
+import { dshThreadFromSnapshot } from './codex-shapes.mjs';
 import { DshxProductAdapter } from './product-adapter.mjs';
 import { codexPlanTarget, threadSettingsUpdatedNotification } from './plan-presentation.mjs';
 import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
@@ -9,11 +10,53 @@ function snapshotTitle(snapshot) {
   return typeof snapshot?.title === 'string' && snapshot.title.length > 0 ? snapshot.title : null;
 }
 
+function isDshSubagent(agent) {
+  return agent?.session?.header?.origin === 'subagent';
+}
+
 /**
  * Final product-facing protocol tail. Keep small metadata/UI compatibility
  * extensions here so the core DSH public adapter remains stable and auditable.
  */
 export class DshxReleaseAdapter extends DshxProductAdapter {
+  async ensureReady() {
+    await super.ensureReady();
+    if (this._agentPresentationDisposers) return;
+    this._agentPresentationDisposers = [
+      this.ctx.on('agent/created', ({ agent }) => {
+        if (!isDshSubagent(agent)) return;
+        try {
+          this.send({ method: 'thread/started', params: { thread: this.liveAgentThread(agent) } });
+        } catch (error) {
+          this.diagnostics(`subagent thread/started projection failed for ${String(agent?.id ?? '')}: ${error instanceof Error ? error.message : error}`);
+        }
+      }),
+      this.ctx.on('agent/status', ({ agent, status }) => {
+        try {
+          this.send({
+            method: 'thread/status/changed',
+            params: {
+              threadId: String(agent.id),
+              status: status === 'running' ? { type: 'active', activeFlags: [] } : { type: 'idle' }
+            }
+          });
+        } catch (error) {
+          this.diagnostics(`agent status projection failed for ${String(agent?.id ?? '')}: ${error instanceof Error ? error.message : error}`);
+        }
+      }),
+      this.ctx.on('agent/disposed', ({ agent }) => {
+        try {
+          this.send({
+            method: 'thread/status/changed',
+            params: { threadId: String(agent.id), status: { type: 'notLoaded' } }
+          });
+        } catch (error) {
+          this.diagnostics(`agent disposal projection failed for ${String(agent?.id ?? '')}: ${error instanceof Error ? error.message : error}`);
+        }
+      })
+    ];
+  }
+
   userShell() {
     return this._userShell ??= new DshUserShellBridge({
       send: this.send,
@@ -48,6 +91,31 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     });
   }
 
+  liveAgentThread(agent) {
+    const thread = dshThreadFromSnapshot({
+      meta: agent.session.header,
+      events: agent.session.events ?? [],
+      model: agent.session.requestHeader?.()?.config,
+      loaded: true,
+      cliVersion: this.version
+    });
+    const title = snapshotTitle(this.driver.currentTitle(agent)) ?? foldDshSessionTitle(agent.session.events ?? []);
+    return {
+      ...thread,
+      status: agent.status === 'running' ? { type: 'active', activeFlags: [] } : { type: 'idle' },
+      name: title,
+      turns: []
+    };
+  }
+
+  loadedThreadList() {
+    return {
+      result: {
+        data: this.driver.listLive().map((agent) => this.liveAgentThread(agent))
+      }
+    };
+  }
+
   installController(handle) {
     const controller = super.installController(handle);
     const threadId = String(controller.agent.id);
@@ -70,6 +138,8 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     switch (method) {
       case 'command/exec':
         return this.commandExec(params);
+      case 'thread/loaded/list':
+        return this.loadedThreadList();
       case 'thread/fork':
         return this.threadForkPresentation(params);
       case 'thread/name/set':
@@ -254,6 +324,8 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
 
   async close() {
     this._userShell?.close();
+    for (const dispose of this._agentPresentationDisposers ?? []) dispose?.();
+    this._agentPresentationDisposers = [];
     for (const dispose of this.planListeners().values()) dispose?.();
     this.planListeners().clear();
     this.planMutationSuppressed().clear();
@@ -261,4 +333,4 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
   }
 }
 
-export const releaseAdapterInternals = { snapshotTitle };
+export const releaseAdapterInternals = { snapshotTitle, isDshSubagent };
