@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Resolve release version (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "DSHX_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Resolve release version (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "DSHX_VERSION=$($env:GITHUB_REF_NAME.TrimStart('v'))"
+      - name: Test presentation adapter
+        run: |
+          npm install
+          npm test
+      - name: Build pinned TUI and package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bash scripts/build-codex-tui.sh
+          node scripts/package-platform.mjs
+      - name: Build pinned TUI and package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/build-codex-tui.ps1
+          node scripts/package-platform.mjs
+      - name: Clean install smoke (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
+          PREFIX="$RUNNER_TEMP/dshx-release-smoke"
+          npm install --global --prefix "$PREFIX" "$TGZ"
+          "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
+          "$PREFIX/bin/dshx" doctor
+      - name: Clean install smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tgz = Get-ChildItem dist\release\dshx-*.tgz | Select-Object -First 1
+          $prefix = Join-Path $env:RUNNER_TEMP 'dshx-release-smoke'
+          npm install --global --prefix $prefix $tgz.FullName
+          $version = & (Join-Path $prefix 'dshx.cmd') --version
+          if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
+          & (Join-Path $prefix 'dshx.cmd') doctor
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dshx-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/release/*.tgz
+            dist/release/*.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create checksums
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum dshx-*.tgz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(--verify-tag --generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" artifacts/* "${flags[@]}"
