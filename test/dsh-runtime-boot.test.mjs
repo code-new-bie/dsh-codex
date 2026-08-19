@@ -26,6 +26,13 @@ test('runtime auto-initializes and composes the official DSH headless profile', 
       '@deepseek-ai/dsh-headless'
     ]);
 
+    assert.equal(
+      readFileSync(composition.rootConfig, 'utf8'),
+      runtimeInternals.PROFILE_ROOT_CONFIG,
+      'DSHX may only rewrite the same empty Loader root role used by official dsh'
+    );
+    assert.match(runtimeInternals.PROFILE_ROOT_CONFIG, /Edit cordis\.patch\.yml, not this file/);
+
     const entries = dshxRuntimeEntries({ home });
     const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
@@ -47,25 +54,41 @@ test('runtime auto-initializes and composes the official DSH headless profile', 
   });
 });
 
-test('profile-local and DSH-home user patch layers remain authoritative for capabilities', () => {
+test('profile-local and DSH-home user patch layers remain authoritative and byte-for-byte untouched', () => {
   temporaryDshHome((home) => {
     // First read creates the official profile using DSH's own template.
-    dshxRuntimeProfile({ home });
-    writeFileSync(join(home, 'profiles', 'headless', 'cordis.patch.yml'), `
-- id: tools
-  config:
-    dshxProfileProbe: profile
-`);
-    writeFileSync(join(home, 'cordis.patch.yml'), `
-- id: llm
-  config:
-    dshxHomeProbe: home
-`);
+    const initial = dshxRuntimeProfile({ home });
+    const profilePatchPath = initial.profile.patchPath;
+    const homePatchPath = initial.homePatchPath;
+    const profilePatch = `# user profile layer - DSHX must never rewrite this byte stream\n- id: tools\n  config:\n    dshxProfileProbe: profile\n`;
+    const homePatch = `# machine DSH layer - DSHX must never rewrite this byte stream\n- id: llm\n  config:\n    dshxHomeProbe: home\n`;
+    writeFileSync(profilePatchPath, profilePatch);
+    writeFileSync(homePatchPath, homePatch);
 
     const entries = dshxRuntimeEntries({ home });
     const byId = new Map(entries.map((entry) => [entry.id, entry]));
     assert.equal(byId.get('tools')?.config?.dshxProfileProbe, 'profile');
     assert.equal(byId.get('llm')?.config?.dshxHomeProbe, 'home');
+
+    assert.equal(readFileSync(profilePatchPath, 'utf8'), profilePatch);
+    assert.equal(readFileSync(homePatchPath, 'utf8'), homePatch);
+    assert.equal(readFileSync(initial.rootConfig, 'utf8'), runtimeInternals.PROFILE_ROOT_CONFIG);
+  });
+});
+
+test('recomposition rewrites only the generated empty root, never either user patch layer', () => {
+  temporaryDshHome((home) => {
+    const initial = dshxRuntimeProfile({ home });
+    const profilePatch = '- id: tools\n  config: { probe: keep-profile }\n';
+    const homePatch = '- id: llm\n  config: { probe: keep-home }\n';
+    writeFileSync(initial.profile.patchPath, profilePatch);
+    writeFileSync(initial.homePatchPath, homePatch);
+    writeFileSync(initial.rootConfig, 'this is generated state and must be reset\n');
+
+    const recomposed = dshxRuntimeProfile({ home });
+    assert.equal(readFileSync(recomposed.rootConfig, 'utf8'), runtimeInternals.PROFILE_ROOT_CONFIG);
+    assert.equal(readFileSync(recomposed.profile.patchPath, 'utf8'), profilePatch);
+    assert.equal(readFileSync(recomposed.homePatchPath, 'utf8'), homePatch);
   });
 });
 
