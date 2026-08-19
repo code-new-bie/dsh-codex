@@ -32,6 +32,24 @@ jobs:
       - run: node --check src/dsh/runtime-boot.mjs
       - run: node --check bin/dshx.mjs
       - run: node --check scripts/package-platform.mjs
+      - run: node --check scripts/runtime-smoke.mjs
+
+  dsh-runtime:
+    name: Official DSH runtime / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - name: Boot and dispose official DeepSeek Harness composition
+        run: node scripts/runtime-smoke.mjs
 
   codex-tui-package:
     name: Pinned TUI + package / ${{ matrix.os }}
@@ -80,6 +98,13 @@ jobs:
           if (-not $approval.Contains('fn dshx_backend')) { throw 'DSHX approval semantics patch is missing' }
           $permissions = Get-Content .upstream\codex\codex-rs\tui\src\chatwidget\permission_popups.rs -Raw
           if (-not $permissions.Contains('fn dshx_backend')) { throw 'DSHX permission picker patch is missing' }
+      - name: Real pinned TUI PTY smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          npm install
+          python3 -m pip install --user pexpect
+          python3 test/tui_smoke.py
       - name: Build installable platform tarball
         shell: bash
         if: runner.os != 'Windows'
