@@ -16,6 +16,7 @@ const REQUIRED_SERVICES = [
   'tools',
   'commands',
   'compaction',
+  'subagents',
   'permissionPresets',
   'approval',
   'userQuestions',
