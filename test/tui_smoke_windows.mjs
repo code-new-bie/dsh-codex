@@ -127,11 +127,12 @@ try {
   dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
   await waitForOutput(state, 'DeepSeek Harness');
-  const prompt = '你好，DSHX ConPTY';
+  term.resize(100, 40);
+  const prompt = '你好，DSHX ConPTY resize';
   term.write(`${prompt}\r`);
   await waitForOutput(state, 'DSHX protocol stub received:');
   await waitForOutput(state, prompt);
-  process.stdout.write('Windows ConPTY DSHX local-IPC + CJK smoke passed\n');
+  process.stdout.write('Windows ConPTY DSHX local-IPC + CJK + resize smoke passed\n');
 } finally {
   dataDisposable?.dispose?.();
   try { term?.kill(); } catch {}
