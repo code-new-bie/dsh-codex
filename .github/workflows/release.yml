@@ -32,6 +32,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Enforce release tag lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" == v1.0.0-rc.* ]]; then
+            expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/release/1.0-rc" --jq .object.sha)"
+            if [[ "$GITHUB_SHA" != "$expected" ]]; then
+              echo "RC tag must point at the current release/1.0-rc head: expected=$expected actual=$GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
+          if [[ "$GITHUB_REF_NAME" == "v1.0.0" ]]; then
+            expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            if [[ "$GITHUB_SHA" != "$expected" ]]; then
+              echo "stable 1.0 tag must point at the current main head: expected=$expected actual=$GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
       - name: Enforce stable 1.0 promotion ledger
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,14 +73,6 @@ jobs:
             echo 'stable 1.0 is blocked: PR #11 has not been merged' >&2
             exit 1
           fi
-          relation="$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...main" --jq .status)"
-          case "$relation" in
-            identical|ahead) ;;
-            *)
-              echo "stable 1.0 is blocked: tag commit $GITHUB_SHA is not contained in main (compare status: $relation)" >&2
-              exit 1
-              ;;
-          esac
       - name: Resolve release version (Unix)
         if: runner.os != 'Windows'
         shell: bash
