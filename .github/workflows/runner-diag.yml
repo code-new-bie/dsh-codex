@@ -1,0 +1,17 @@
+name: Runner acquisition diagnostic
+
+on:
+  push:
+    branches: ['diag/actions-runner']
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "runner acquired"
+          uname -a
