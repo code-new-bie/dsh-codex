@@ -28,7 +28,9 @@ The pinned TUI explicitly rejects TCP WebSocket endpoints in DSHX mode.
 
 On Unix, the rendezvous directory is a fresh random directory below the system temporary directory and both DSHX and pinned `codex_uds` enforce owner-only `0700` directory permissions.
 
-On Windows, pinned `codex_uds` cannot apply Unix permission bits, so DSHX deliberately does **not** trust an arbitrary/shared `%TEMP%` as the default rendezvous root. The random socket directory is created below the current user's DSHX presentation home (`~/.dshx/codex-tui/ipc/` by default), inheriting the user's profile ACL. The bridge removes its socket path on exit and the launcher removes the random rendezvous directory during bounded shutdown.
+On Windows, pinned `codex_uds` cannot apply Unix permission bits, so DSHX deliberately does **not** trust an arbitrary/shared `%TEMP%` as the default rendezvous root. The random socket directory is created below the current user's DSHX presentation home (`~/.dshx/codex-tui/i/` by default), inheriting the user's profile ACL. The Windows suffix is deliberately short, and DSHX rejects an AF_UNIX pathname at or above the fixed 108-byte `sun_path` capacity before launching the bridge; the error instructs the user to select a shorter `DSHX_TUI_HOME` under the user profile. Path length is measured in UTF-8 bytes so non-ASCII profile paths fail predictably rather than at bind time.
+
+The bridge removes its socket path on exit and the launcher removes the random rendezvous directory during bounded shutdown. Rendezvous cleanup is performed even if official DSH runtime disposal itself fails.
 
 The isolated DSHX presentation home is never the user's ordinary `CODEX_HOME`.
 
@@ -47,6 +49,6 @@ A production release must include regression coverage for:
 - model/provider configuration preservation;
 - user profile/home DSH patch files remaining unmodified by DSHX;
 - malformed/unknown protocol events;
-- private local-IPC path creation and bounded cleanup;
+- private local-IPC path creation, Windows AF_UNIX path limits, and bounded cleanup even on runtime-disposal failure;
 - no production TCP listener or Codex-core fallback;
 - transport disconnect/reconnect behavior where applicable.
