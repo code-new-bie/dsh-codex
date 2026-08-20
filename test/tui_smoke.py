@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+import json
 import os
 import pathlib
 import subprocess
 import tempfile
+import time
 
 import pexpect
 
@@ -21,6 +23,27 @@ server = subprocess.Popen(
     stderr=subprocess.PIPE,
     text=True,
 )
+
+
+def wait_for_protocol_notification(method, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if trace_path.exists():
+            for line in trace_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    record.get("direction") == "out"
+                    and record.get("kind") == "notification"
+                    and record.get("method") == method
+                ):
+                    return
+        time.sleep(0.05)
+    trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
+    raise AssertionError(f"Timed out waiting for protocol notification {method!r}.\nProtocol trace:\n{trace}")
+
 
 try:
     endpoint = server.stdout.readline().strip()
@@ -51,6 +74,7 @@ try:
         try:
             child.expect("DeepSeek Harness")
             transcript.append(child.before + child.after)
+            wait_for_protocol_notification("thread/started")
             child.setwinsize(40, 100)
             child.send(PROMPT + "\r")
             child.expect("DSHX protocol stub received:")
