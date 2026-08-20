@@ -78,22 +78,23 @@ test('resumed human transcript keeps shadowed history and adds one compaction ma
   assert.equal(JSON.stringify(turns).includes('MODEL ONLY CHECKPOINT'), false);
 });
 
-test('thread/compact/start delegates to DSH compaction and reports no-op without durable fabrication', async () => {
+test('thread/compact/start delegates to the official DSH command plane and reports a no-op result', async () => {
   const adapter = Object.create(DshxProductAdapter.prototype);
   const warnings = [];
   adapter.send = (message) => warnings.push(message);
   adapter.diagnostics = () => {};
-  adapter.controllers = new Map([['session-1', { agent: { id: 'session-1' } }]]);
+  const agent = { id: 'session-1' };
+  adapter.controllers = new Map([['session-1', { agent }]]);
   adapter._manualCompactions = new Map();
-  let compactCalls = 0;
+  const commandCalls = [];
   adapter.ctx = {
     get(name) {
-      if (name === 'compaction') {
+      if (name === 'commands') {
         return {
-          async compactNow(_agent, signal) {
-            compactCalls += 1;
+          async execute(receivedAgent, line, images, signal) {
+            commandCalls.push([receivedAgent, line, images]);
             assert.equal(signal.aborted, false);
-            return null;
+            return { result: { text: 'No compactable history yet.' } };
           }
         };
       }
@@ -105,7 +106,7 @@ test('thread/compact/start delegates to DSH compaction and reports no-op without
   assert.deepEqual(response.result, {});
   response.afterResponse();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(compactCalls, 1);
+  assert.deepEqual(commandCalls, [[agent, '/compact', []]]);
   assert.deepEqual(warnings, [{
     method: 'warning',
     params: { threadId: 'session-1', message: 'No compactable history yet.' }
