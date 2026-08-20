@@ -6,7 +6,7 @@ import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCliInvocation } from '../src/cli/arguments.mjs';
-import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
+import { localServerInternals, startDshxLocalServer } from '../src/dsh/local-server.mjs';
 import { dshxRuntimeEntries } from '../src/dsh/runtime-boot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,15 +41,43 @@ function dshxTuiHome() {
   return path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'));
 }
 
+function commandDetail(command, result) {
+  if (result.status === 0) return (result.stdout || result.stderr).trim();
+  if (result.error) return `${command} failed: ${result.error.message}`;
+  return `${command} is not runnable${result.stderr ? `: ${result.stderr.trim()}` : ''}`;
+}
+
+function presentationHomeCheck() {
+  const home = dshxTuiHome();
+  try {
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    const stat = fs.statSync(home);
+    if (!stat.isDirectory()) throw new Error('path exists but is not a directory');
+    fs.accessSync(home, fs.constants.R_OK | fs.constants.W_OK);
+
+    // On Windows this also enforces that a custom DSHX_TUI_HOME stays below
+    // the current user's profile ACL boundary. Probe the fixed suffix used by
+    // the real random rendezvous directory so an obviously-too-long home fails
+    // in doctor before a runtime boot is attempted.
+    const socketRoot = localServerInternals.defaultSocketRoot({ home });
+    const probeSocket = path.join(socketRoot, 'd-XXXXXX', 's');
+    localServerInternals.assertSocketPathSupported(probeSocket);
+    return { ok: true, detail: home };
+  } catch (error) {
+    return { ok: false, detail: `${home}: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 function doctor() {
   const executable = packagedTuiBinary();
   const tuiCheck = executable && fs.existsSync(executable)
     ? spawnSync(executable, ['--version'], { encoding: 'utf8' })
-    : { status: 127, stdout: '', stderr: '' };
+    : { status: 127, stdout: '', stderr: '', error: null };
   const bridge = packagedIpcBridgeBinary();
   const bridgeCheck = bridge && fs.existsSync(bridge)
     ? spawnSync(bridge, ['--check'], { encoding: 'utf8' })
-    : { status: 127, stdout: '', stderr: '' };
+    : { status: 127, stdout: '', stderr: '', error: null };
+  const homeCheck = presentationHomeCheck();
 
   let runtimeDetail;
   let runtimeOk = false;
@@ -69,24 +97,16 @@ function doctor() {
     ['Node', process.version, Number(process.versions.node.split('.')[0]) >= 20],
     [
       'Pinned Codex TUI',
-      tuiCheck.status === 0
-        ? (tuiCheck.stdout || tuiCheck.stderr).trim()
-        : executable
-          ? `${executable} is not built/runnable${tuiCheck.stderr ? `: ${tuiCheck.stderr.trim()}` : ''}`
-          : 'not found',
+      tuiCheck.status === 0 ? commandDetail(executable, tuiCheck) : (executable ? commandDetail(executable, tuiCheck) : 'not found'),
       tuiCheck.status === 0
     ],
     [
       'Local IPC bridge',
-      bridgeCheck.status === 0
-        ? `${bridge} (cross-platform Codex UDS)`
-        : bridge
-          ? `${bridge} is not built/runnable${bridgeCheck.stderr ? `: ${bridgeCheck.stderr.trim()}` : ''}`
-          : 'not found',
+      bridgeCheck.status === 0 ? `${bridge} (cross-platform Codex UDS)` : (bridge ? commandDetail(bridge, bridgeCheck) : 'not found'),
       bridgeCheck.status === 0
     ],
     ['DeepSeek Harness', runtimeDetail, runtimeOk],
-    ['Presentation home', dshxTuiHome(), true]
+    ['Presentation home / IPC path', homeCheck.detail, homeCheck.ok]
   ];
   for (const [name, detail, ok] of rows) {
     process.stdout.write(`${ok ? '✓' : '✗'} ${name}: ${detail}\n`);
