@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Pin = (Get-Content (Join-Path $Root 'upstream/CODEX_COMMIT') -Raw).Trim()
@@ -20,8 +21,10 @@ git -C $Dest clean -ffd | Out-Null
 
 $Patches = Get-ChildItem (Join-Path $Root 'upstream\patches\codex\*.patch') -ErrorAction SilentlyContinue | Sort-Object Name
 foreach ($Patch in $Patches) {
-    git -C $Dest apply --check $Patch.FullName
-    git -C $Dest apply $Patch.FullName
+    # Recount stale hand-maintained hunk line counts, but still require every
+    # context line to match the pinned Codex commit before applying the patch.
+    git -C $Dest apply --recount --check $Patch.FullName
+    git -C $Dest apply --recount $Patch.FullName
 }
 
 Write-Host "Materialized Codex $Pin at $Dest"
