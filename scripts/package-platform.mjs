@@ -86,7 +86,7 @@ const packageJson = {
   license: 'Apache-2.0',
   os: [platform],
   cpu: [arch],
-  engines: { node: '>=20' },
+  engines: rootPackage.engines,
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
