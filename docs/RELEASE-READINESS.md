@@ -23,8 +23,9 @@ No item becomes green because code for the check exists. A release candidate is 
 | Real pinned TUI / Linux | PTY smoke drives pinned TUI through local IPC, resizes the terminal, and roundtrips a CJK prompt | pass |
 | Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology, resizes the terminal, and roundtrips a Chinese prompt | pass |
 | Automated CJK/resize sanity | Linux PTY + Windows ConPTY verify UTF-8 input/echo survives a live resize without process/session loss | pass |
-| Packaging | platform tarball + static local-import closure check + exact DSH shrinkwrap | pass |
+| Packaging | platform tarball + static local-import closure check + publishable shrinkwrap derived from the frozen source graph | pass |
 | Clean installation | install generated tarball then `dshx --version` + `dshx doctor` | pass on every release platform |
+| Release provenance | platform sidecar records Codex pin, DSH pin and SHA-256 of the frozen source `package-lock.json` | present and consistent across artifacts |
 | Release artifacts | Linux x64, Windows x64, macOS arm64, macOS x64 | all built |
 | Integrity | release `SHA256SUMS` | published |
 | Codex thin-fork invariants | patch application/build plus CI source assertions | pass |
@@ -46,6 +47,16 @@ Automation can exercise PTY/ConPTY resize and Chinese text, but it cannot establ
 - resume picker and restored session/model state;
 - status/footer rendering.
 
+Before starting the manual comparison, verify and install the **exact generated Windows artifact** with:
+
+```powershell
+./scripts/windows-rc-acceptance.ps1 `
+  -Tarball .\dshx-<version>-win32-x64.tgz `
+  -ExpectedSha256 <SHA256SUMS value>
+```
+
+The harness verifies the artifact hash, performs an isolated global-prefix install, runs `dshx --version` and `dshx doctor`, and prints the exact installed `dshx.cmd` path to use for the Windows Terminal/IME session. Do not substitute a source checkout after this setup.
+
 Any difference is either fixed, documented as a deliberate product difference in `docs/UX-PARITY.md`, or blocks 1.0.
 
 ## Promotion procedure
@@ -53,10 +64,11 @@ Any difference is either fixed, documented as a deliberate product difference in
 1. Freeze the dependency graph in `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`; Codex/DSH pins must not change during validation.
 2. Run the full CI workflow and the dedicated Windows ConPTY workflow for that exact commit.
 3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass.
-4. Install the generated Windows release artifact for the manual Windows Terminal/CJK/IME side-by-side acceptance run; do not validate a source checkout instead.
-5. Resolve every failed gate without weakening a DSH ownership or security boundary.
-6. Re-run affected automated and manual gates after fixes.
-7. Promote only a commit/tag for which all required evidence is green.
+4. Confirm each release sidecar identifies the same frozen source-lock SHA-256 and expected Codex/DSH pins.
+5. Run `scripts/windows-rc-acceptance.ps1` against the generated Windows release artifact and its published SHA-256, then use the printed installed launcher for the manual Windows Terminal/CJK/IME side-by-side acceptance run.
+6. Resolve every failed gate without weakening a DSH ownership or security boundary.
+7. Re-run affected automated and manual gates after fixes.
+8. Promote only a commit/tag for which all required evidence is green.
 
 ## Current integration note
 
