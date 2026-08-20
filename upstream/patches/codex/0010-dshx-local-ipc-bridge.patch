@@ -1,14 +1,14 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -4246,9 +4246,11 @@ dependencies = [
- "anyhow",
- "codex-uds",
- "codex-utils-cargo-bin",
+@@ -4254,9 +4254,11 @@ dependencies = [
+  "anyhow",
+  "codex-uds",
+  "codex-utils-cargo-bin",
 + "futures",
- "pretty_assertions",
- "tempfile",
- "tokio",
+  "pretty_assertions",
+  "tempfile",
+  "tokio",
 + "tokio-tungstenite",
  ]
  
