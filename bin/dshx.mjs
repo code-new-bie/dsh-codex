@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseCliInvocation } from '../src/cli/arguments.mjs';
 import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
 import { dshxRuntimeEntries } from '../src/dsh/runtime-boot.mjs';
 
@@ -38,22 +39,6 @@ function packagedIpcBridgeBinary() {
 
 function dshxTuiHome() {
   return path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'));
-}
-
-function parseLaunchArgs(args) {
-  if (args[0] !== 'resume') return { tuiArgs: args, resumeEnv: {} };
-  const rest = args.slice(1);
-  if (rest.length === 0) return { tuiArgs: [], resumeEnv: { DSHX_RESUME_MODE: 'picker' } };
-  if (rest.length === 1 && rest[0] === '--last') {
-    return { tuiArgs: [], resumeEnv: { DSHX_RESUME_MODE: 'last' } };
-  }
-  if (rest.length === 1 && !rest[0].startsWith('-')) {
-    return {
-      tuiArgs: [],
-      resumeEnv: { DSHX_RESUME_MODE: 'id', DSHX_RESUME_SESSION_ID: rest[0] }
-    };
-  }
-  throw new Error('Usage: dshx resume [--last|<session>]');
 }
 
 function doctor() {
@@ -118,25 +103,25 @@ function doctor() {
 
 async function run() {
   const args = process.argv.slice(2);
-  if (args.includes('--help') || args.includes('-h')) {
-    process.stdout.write(usage());
-    return;
-  }
-  if (args.includes('--version') || args.includes('-V')) {
-    process.stdout.write(`${VERSION}\n`);
-    return;
-  }
-  if (args[0] === 'doctor') {
-    doctor();
-    return;
-  }
-
-  let launch;
+  let invocation;
   try {
-    launch = parseLaunchArgs(args);
+    invocation = parseCliInvocation(args);
   } catch (error) {
     process.stderr.write(`dshx: ${error.message}\n`);
     process.exitCode = 2;
+    return;
+  }
+
+  if (invocation.kind === 'help') {
+    process.stdout.write(usage());
+    return;
+  }
+  if (invocation.kind === 'version') {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+  if (invocation.kind === 'doctor') {
+    doctor();
     return;
   }
 
@@ -181,14 +166,14 @@ async function run() {
     return;
   }
 
-  const child = spawn(executable, launch.tuiArgs, {
+  const child = spawn(executable, invocation.tuiArgs, {
     cwd: process.cwd(),
     env: {
       ...process.env,
       // Do not inherit CODEX_HOME: DSHX uses Codex code as a presentation
       // component only and must not read/write the user's ordinary Codex state.
       CODEX_HOME: tuiHome,
-      ...launch.resumeEnv,
+      ...invocation.resumeEnv,
       DSHX_APP_SERVER_ENDPOINT: local.url
     },
     stdio: 'inherit',
@@ -202,7 +187,8 @@ async function run() {
     try {
       await local.close();
     } catch (error) {
-      if (debug) process.stderr.write(`[dshx] shutdown: ${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(`dshx: shutdown cleanup failed: ${error instanceof Error ? error.message : error}\n`);
+      if (exitCode === 0) exitCode = 1;
     }
     process.exitCode = exitCode;
   };
