@@ -23,6 +23,7 @@ No item becomes green because code for the check exists. A release candidate is 
 | Real pinned TUI / Linux + macOS | PTY smoke drives pinned TUI through local IPC, resizes the terminal, and roundtrips a CJK prompt | pass on both Unix release platforms |
 | Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology, resizes the terminal, and roundtrips a Chinese prompt | pass |
 | Automated CJK/resize sanity | Linux/macOS PTY + Windows ConPTY verify UTF-8 input/echo survives a live resize without process/session loss | pass |
+| CI action supply chain | every external `uses:` ref is a current GitHub Action release pinned to a full immutable commit SHA; `test/ci-actions-pins.test.mjs` rejects mutable refs | pass |
 | Packaging | platform tarball + static local-import closure check + publishable shrinkwrap derived from the frozen source graph | pass |
 | Clean installation | install generated tarball then `dshx --version` + `dshx doctor` | pass on every release platform |
 | Release provenance | platform sidecar records Codex pin, DSH pin and SHA-256 of the frozen source `package-lock.json` | present and consistent across artifacts |
