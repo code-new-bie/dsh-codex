@@ -106,8 +106,8 @@ jobs:
         run: |
           & .\dist\bin\dshx-ipc-bridge.exe --check
           if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
-      - name: Real pinned TUI local-IPC PTY smoke
-        if: runner.os == 'Linux'
+      - name: Real pinned TUI local-IPC PTY + CJK + resize smoke
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           python3 -m pip install --user pexpect
@@ -173,7 +173,6 @@ jobs:
           import glob
           import json
           import os
-          import sys
 
           files = sorted(glob.glob('artifacts/dshx-*.tgz.json'))
           if len(files) != 4:
