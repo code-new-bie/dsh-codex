@@ -121,8 +121,16 @@ function waitForExit(child, timeoutMs = 750) {
   });
 }
 
+function cleanupDiagnostic(log, scope, error) {
+  log(`${scope}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 async function cleanupFailedStartup({ lines, bridge, ctx, socketDirectory, log }) {
-  lines?.close();
+  try {
+    lines?.close();
+  } catch (error) {
+    cleanupDiagnostic(log, 'startup rollback: readline cleanup failed', error);
+  }
   if (bridge) {
     try {
       if (bridge.stdin?.writable) bridge.stdin.end();
@@ -130,15 +138,20 @@ async function cleanupFailedStartup({ lines, bridge, ctx, socketDirectory, log }
       await waitForExit(bridge);
       if (bridge.exitCode === null && bridge.signalCode === null) bridge.kill?.('SIGKILL');
     } catch (error) {
-      log(`startup rollback: bridge cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      cleanupDiagnostic(log, 'startup rollback: bridge cleanup failed', error);
     }
   }
   try {
     await ctx?.dispose?.();
   } catch (error) {
-    log(`startup rollback: DSH dispose failed: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    if (socketDirectory) fs.rmSync(socketDirectory, { recursive: true, force: true });
+    cleanupDiagnostic(log, 'startup rollback: DSH dispose failed', error);
+  }
+  if (socketDirectory) {
+    try {
+      fs.rmSync(socketDirectory, { recursive: true, force: true });
+    } catch (error) {
+      cleanupDiagnostic(log, 'startup rollback: rendezvous cleanup failed', error);
+    }
   }
 }
 
