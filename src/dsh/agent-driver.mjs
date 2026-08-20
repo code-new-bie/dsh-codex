@@ -30,16 +30,19 @@ export class DshAgentDriver {
     await this.ctx.get('loader')?.await?.();
   }
 
-  restoredSelection(agent) {
+  persistedSelection(agent) {
     const logged = agent.session.requestHeader?.()?.config;
-    if (logged !== undefined) {
-      return {
-        provider: logged.provider,
-        model: logged.model,
-        ...(logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort })
-      };
-    }
-    return requireService(this.ctx, 'agentDefaultModel').currentSelection();
+    if (logged === undefined) return undefined;
+    return {
+      provider: logged.provider,
+      model: logged.model,
+      ...(logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort })
+    };
+  }
+
+  restoredSelection(agent) {
+    return this.persistedSelection(agent)
+      ?? requireService(this.ctx, 'agentDefaultModel').currentSelection();
   }
 
   selectionFor(agent) {
@@ -48,16 +51,16 @@ export class DshAgentDriver {
     if (this.externalSelections.has(agent)) {
       throw new Error('DSHX must not install a second model-selection listener on a Host-owned Agent');
     }
-    let picked;
+    const driver = this;
+    let picked = this.persistedSelection(agent);
     const selection = {
       get current() {
-        if (picked !== undefined) return picked;
-        return undefined;
+        return picked
+          ?? requireService(driver.ctx, 'agentDefaultModel').currentSelection();
       },
       set current(next) { picked = next; },
       assembled: undefined
     };
-    selection.current = this.restoredSelection(agent);
     installModelSelection(agent.ctx, selection);
     this.selections.set(agent, selection);
     return selection;
