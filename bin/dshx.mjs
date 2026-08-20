@@ -6,6 +6,7 @@ import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCliInvocation } from '../src/cli/arguments.mjs';
+import { isSupportedNodeVersion } from '../src/cli/runtime.mjs';
 import { localServerInternals, startDshxLocalServer } from '../src/dsh/local-server.mjs';
 import { dshxRuntimeEntries } from '../src/dsh/runtime-boot.mjs';
 
@@ -94,7 +95,7 @@ function doctor() {
   }
 
   const rows = [
-    ['Node', process.version, Number(process.versions.node.split('.')[0]) >= 20],
+    ['Node', `${process.version} (required: ${PACKAGE.engines.node})`, isSupportedNodeVersion(process.versions.node)],
     [
       'Pinned Codex TUI',
       tuiCheck.status === 0 ? commandDetail(executable, tuiCheck) : (executable ? commandDetail(executable, tuiCheck) : 'not found'),
