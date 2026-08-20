@@ -39,6 +39,8 @@ def wait_for_protocol_notification(method, timeout=10):
                     and record.get("kind") == "notification"
                     and record.get("method") == method
                 ):
+                    if method == "thread/started" and not isinstance(record.get("threadId"), str):
+                        continue
                     return
         time.sleep(0.05)
     trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
@@ -76,7 +78,11 @@ try:
             transcript.append(child.before + child.after)
             wait_for_protocol_notification("thread/started")
             child.setwinsize(40, 100)
-            child.send(PROMPT + "\r")
+            child.send(PROMPT)
+            # Pinned Codex enables the kitty keyboard enhancement protocol (CSI-u).
+            # pexpect is a PTY transport, not a terminal emulator, so emulate the
+            # Enter key encoding a compliant terminal sends while that mode is active.
+            child.send("\x1b[13u")
             child.expect("DSHX protocol stub received:")
             transcript.append(child.before + child.after)
             child.expect(PROMPT)
