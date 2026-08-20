@@ -10,7 +10,7 @@
     "dshx": "./bin/dshx.mjs"
   },
   "scripts": {
-    "test": "node --test --test-force-exit \"test/**/*.test.mjs\"",
+    "test": "node scripts/run-unit-tests.mjs",
     "test:protocol": "node --test --test-force-exit test/protocol.test.mjs test/wire.test.mjs",
     "test:dsh": "node --test --test-force-exit \"test/dsh-*.test.mjs\"",
     "freeze:deps": "node scripts/freeze-deps.mjs",
