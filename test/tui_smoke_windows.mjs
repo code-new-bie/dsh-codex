@@ -42,6 +42,35 @@ function waitForOutput(state, needle, timeoutMs = 30_000) {
   });
 }
 
+function waitForProtocolNotification(traceFile, method, timeoutMs = 10_000) {
+  const started = Date.now();
+  return new Promise((resolve, reject) => {
+    const poll = setInterval(() => {
+      if (fs.existsSync(traceFile)) {
+        for (const line of fs.readFileSync(traceFile, 'utf8').split(/\r?\n/)) {
+          if (!line) continue;
+          let record;
+          try { record = JSON.parse(line); } catch { continue; }
+          if (
+            record.direction === 'out' &&
+            record.kind === 'notification' &&
+            record.method === method &&
+            (method !== 'thread/started' || typeof record.threadId === 'string')
+          ) {
+            clearInterval(poll);
+            resolve();
+            return;
+          }
+        }
+      }
+      if (Date.now() - started < timeoutMs) return;
+      clearInterval(poll);
+      const trace = fs.existsSync(traceFile) ? fs.readFileSync(traceFile, 'utf8') : '<missing trace>';
+      reject(new Error(`Timed out waiting for protocol notification ${JSON.stringify(method)}.\nProtocol trace:\n${trace}`));
+    }, 50);
+  });
+}
+
 function firstLine(stream, child, stderrText, timeoutMs = 15_000) {
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   return new Promise((resolve, reject) => {
@@ -93,6 +122,7 @@ if (!fs.existsSync(binary)) throw new Error(`built DSHX TUI missing: ${binary}`)
 if (!fs.existsSync(bridge)) throw new Error(`built DSHX IPC bridge missing: ${bridge}`);
 
 const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-conpty-home-'));
+const traceFile = path.join(os.tmpdir(), `dshx-conpty-trace-${process.pid}-${Date.now()}.jsonl`);
 let server;
 let serverStderr = '';
 let term;
@@ -100,7 +130,7 @@ let dataDisposable;
 try {
   server = spawn(process.execPath, [path.join(ROOT, 'bin', 'dshx-stub-local.mjs')], {
     cwd: ROOT,
-    env: stringEnv({ DSHX_IPC_BRIDGE_BIN: bridge }),
+    env: stringEnv({ DSHX_IPC_BRIDGE_BIN: bridge, DSHX_STUB_TRACE_FILE: traceFile }),
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
   });
@@ -127,9 +157,13 @@ try {
   dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
   await waitForOutput(state, 'DeepSeek Harness');
+  await waitForProtocolNotification(traceFile, 'thread/started');
   term.resize(100, 40);
   const prompt = '你好，DSHX ConPTY resize';
-  term.write(`${prompt}\r`);
+  term.write(prompt);
+  // Pinned Codex requests kitty keyboard enhancement reporting. node-pty is a
+  // ConPTY transport rather than a terminal emulator, so encode Enter as CSI-u.
+  term.write('\x1b[13u');
   await waitForOutput(state, 'DSHX protocol stub received:');
   await waitForOutput(state, prompt);
   process.stdout.write('Windows ConPTY DSHX local-IPC + CJK + resize smoke passed\n');
@@ -141,4 +175,5 @@ try {
   await sleep(100);
   await stopChild(server);
   fs.rmSync(codexHome, { recursive: true, force: true });
+  fs.rmSync(traceFile, { force: true });
 }
