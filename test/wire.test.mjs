@@ -72,10 +72,11 @@ function closeSocket(socket) {
 
 test('wire: Codex-style initialize → thread → streamed turn lifecycle', async (t) => {
   const server = await startProtocolStubServer({ eventDelayMs: 2 });
-  t.after(async () => server.close());
-
   const socket = await openSocket(server.url);
-  t.after(async () => closeSocket(socket));
+  t.after(async () => {
+    await closeSocket(socket);
+    await server.close();
+  });
   const inbox = createInbox(socket);
 
   send(socket, {
