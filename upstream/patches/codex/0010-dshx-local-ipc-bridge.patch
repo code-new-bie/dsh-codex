@@ -1,7 +1,11 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -4254,9 +4254,11 @@ dependencies = [
+@@ -4250,16 +4250,18 @@
+ [[package]]
+ name = "codex-stdio-to-uds"
+ version = "0.0.0"
+ dependencies = [
   "anyhow",
   "codex-uds",
   "codex-utils-cargo-bin",
@@ -13,6 +17,9 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
  ]
  
  [[package]]
+ name = "codex-terminal-detection"
+ version = "0.0.0"
+ dependencies = [
 diff --git a/codex-rs/stdio-to-uds/Cargo.toml b/codex-rs/stdio-to-uds/Cargo.toml
 --- a/codex-rs/stdio-to-uds/Cargo.toml
 +++ b/codex-rs/stdio-to-uds/Cargo.toml
