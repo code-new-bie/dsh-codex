@@ -31,10 +31,14 @@ requireText('src/dsh/runtime-boot.mjs', 'loadProfile(');
 requireText('src/dsh/runtime-boot.mjs', 'composeEntries(');
 requireText('src/dsh/runtime-boot.mjs', "{ id: 'headless-startup', disabled: true }");
 requireText('src/dsh/runtime-boot.mjs', "{ id: 'headless-runner', disabled: true }");
-requireText('src/dsh/runtime-boot.mjs', 'const ctx = await boot(');
+requireText('src/dsh/runtime-boot.mjs', 'ctx = await boot(');
 requireText('src/dsh/runtime-boot.mjs', 'profile.layers.flatMap((layer) => layer.patches)');
 requireText('src/dsh/runtime-boot.mjs', 'profile.patches');
 requireText('src/dsh/runtime-boot.mjs', 'homePatches');
+// Presentation lifetime may adapt the Context shape, but teardown must remain
+// delegated to Cordis/DSH root-fiber ownership rather than a DSHX runtime.
+requireText('src/dsh/runtime-boot.mjs', 'ctx.fiber.dispose()');
+requireText('src/dsh/runtime-boot.mjs', 'attachPresentationLifetime(ctx)');
 
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');
