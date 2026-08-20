@@ -23,8 +23,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
       - name: Install frozen dependency graph
@@ -59,8 +59,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
       - name: Install frozen dependency graph
@@ -79,8 +79,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
       - name: Build pinned Codex TUI + local IPC bridge (Unix)
@@ -197,10 +197,13 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euo pipefail
           npm ci
           node scripts/verify-dsh-closure.mjs
-          python3 -m pip install --user pexpect
-          python3 test/tui_smoke.py
+          VENV="$RUNNER_TEMP/dshx-pty-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
+          "$VENV/bin/python" test/tui_smoke.py
       - name: Build installable platform tarball (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -229,7 +232,7 @@ jobs:
           npm install --global --prefix $prefix $tgz.FullName
           & (Join-Path $prefix 'dshx.cmd') --version
           & (Join-Path $prefix 'dshx.cmd') doctor
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dshx-${{ runner.os }}-${{ runner.arch }}
           path: |
@@ -241,7 +244,7 @@ jobs:
     name: Ownership boundary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Assert architecture contract exists
         shell: bash
         run: |
