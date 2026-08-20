@@ -105,14 +105,23 @@ export async function startProtocolStubServer({
     throw new Error('Protocol stub server did not bind a TCP address');
   }
 
+  let closePromise;
+  const close = () => {
+    if (closePromise) return closePromise;
+    closePromise = new Promise((resolve, reject) => {
+      // WebSocketServer.close() waits for connected clients. Stub shutdown owns
+      // those test/dev clients so callers cannot deadlock by closing the server first.
+      for (const client of server.clients) client.terminate();
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    return closePromise;
+  };
+
   return {
     host,
     port: address.port,
     url: `ws://${host}:${address.port}`,
     token,
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      })
+    close
   };
 }
