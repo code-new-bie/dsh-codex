@@ -94,7 +94,13 @@ The release tarball already contains the matching native `dshx-tui` and `dshx-ip
 
 Source builds are for contributors and DSHX development. Requirements: Node.js 20+, Rust/Cargo, Git and the platform toolchain required by the pinned Codex workspace.
 
-After the RC dependency graph has been frozen:
+The release dependency graph is frozen outside CI so GitHub Actions never mutates the candidate branch. On a trusted Node 20 machine with npm-registry access, generate and verify the lock with:
+
+```bash
+npm run freeze:deps
+```
+
+Review and commit the generated `package-lock.json`. Do not hand-edit or fabricate it. After the graph has been frozen, all contributor/CI installs use:
 
 ```bash
 npm ci
@@ -122,9 +128,11 @@ dshx
 
 ## Release model
 
-Tags matching `v*` build platform-specific installable tarballs in GitHub Actions. The release workflow performs adapter/runtime tests from the frozen npm graph, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises Linux/macOS PTY and Windows ConPTY real-TUI gates, verifies cross-platform provenance, and publishes SHA-256 checksums for both tarballs and provenance sidecars. Release candidates containing `-` in the tag are published as prereleases.
+GitHub Actions is an automation surface rather than the authority for repository correctness. Ordinary PR/main CI is deliberately lean: one Node 20 core job followed by one Linux TUI job. `release/**` adds real Windows ConPTY and macOS PTY/CJK/resize gates. Only `v*` tags run the full platform packaging, clean-install, provenance, checksum and publication matrix.
 
-The publishable `npm-shrinkwrap.json` inside each artifact is derived from the trusted source `package-lock.json`; packaging does not resolve a second dependency graph. Release sidecars record the source-lock SHA-256 plus the pinned Codex and DSH commits.
+The release workflow builds platform-specific installable tarballs from the frozen npm graph, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises Linux/macOS PTY and Windows ConPTY real-TUI gates, verifies cross-platform provenance, and publishes SHA-256 checksums for both tarballs and provenance sidecars. Release candidates containing `-` in the tag are published as prereleases.
+
+The publishable `npm-shrinkwrap.json` inside each artifact is derived from the reviewed source `package-lock.json`; packaging does not resolve a second dependency graph. Release sidecars record the source-lock SHA-256 plus the pinned Codex and DSH commits.
 
 ## Design references
 
