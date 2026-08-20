@@ -1,0 +1,73 @@
+name: RC Platform Gate
+
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows ConPTY / CJK / local IPC
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: Install frozen dependency graph
+        run: npm ci
+      - name: Verify exact DeepSeek Harness release closure
+        run: node scripts/verify-dsh-closure.mjs
+      - name: Build pinned Codex TUI + local IPC bridge
+        shell: pwsh
+        run: ./scripts/build-codex-tui.ps1
+      - name: Verify thin-fork and transport invariants
+        run: node scripts/verify-tui-invariants.mjs
+      - name: Verify Windows local IPC data plane
+        shell: pwsh
+        run: |
+          & .\dist\bin\dshx-ipc-bridge.exe --check
+          if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
+      - name: Install test-only ConPTY bridge
+        shell: pwsh
+        run: npm install --no-save --package-lock=false node-pty@1.1.0
+      - name: Exercise real TUI through Windows ConPTY + CJK text
+        run: node test/tui_smoke_windows.mjs
+
+  macos:
+    name: macOS PTY / CJK / resize / local IPC
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: Install frozen dependency graph
+        run: npm ci
+      - name: Verify exact DeepSeek Harness release closure
+        run: node scripts/verify-dsh-closure.mjs
+      - name: Build pinned Codex TUI + local IPC bridge
+        shell: bash
+        run: bash scripts/build-codex-tui.sh
+      - name: Verify thin-fork and transport invariants
+        run: node scripts/verify-tui-invariants.mjs
+      - name: Verify macOS local IPC data plane
+        shell: bash
+        run: dist/bin/dshx-ipc-bridge --check
+      - name: Exercise real TUI through macOS PTY + CJK + resize
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/dshx-pty-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
+          "$VENV/bin/python" test/tui_smoke.py
