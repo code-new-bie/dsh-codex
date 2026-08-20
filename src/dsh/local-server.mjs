@@ -9,6 +9,7 @@ import { bootDshxRuntime } from './runtime-boot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const READY = 'ready';
+const WINDOWS_UNIX_PATH_MAX = 108;
 
 function packagedBridgeBinary() {
   const name = process.platform === 'win32' ? 'dshx-ipc-bridge.exe' : 'dshx-ipc-bridge';
@@ -35,16 +36,33 @@ function defaultSocketRoot({
   // codex_uds can enforce 0700 on Unix. Its Windows implementation inherits
   // directory ACLs instead, so do not trust an arbitrary/shared %TEMP% root.
   // Anchor the rendezvous below the current user's DSHX presentation home,
-  // whose parent in turn lives below the user's profile by default.
+  // whose parent in turn lives below the user's profile by default. Keep the
+  // Windows suffix deliberately short because sockaddr_un.sun_path is bounded.
   const presentationHome = path.resolve(home || path.join(userHome, '.dshx', 'codex-tui'));
-  return path.join(presentationHome, 'ipc');
+  return path.join(presentationHome, 'i');
 }
 
 function createSocketDirectory(root) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const directory = fs.mkdtempSync(path.join(root, 'dshx-'));
+  const directory = fs.mkdtempSync(path.join(root, 'd-'));
   if (process.platform !== 'win32') fs.chmodSync(directory, 0o700);
   return directory;
+}
+
+function assertSocketPathSupported(socketPath, {
+  platform = process.platform,
+  windowsUnixPathMax = WINDOWS_UNIX_PATH_MAX
+} = {}) {
+  if (platform !== 'win32') return;
+  const bytes = Buffer.byteLength(socketPath, 'utf8');
+  // sun_path needs one byte for the terminating NUL, so the pathname itself
+  // must remain strictly shorter than the fixed buffer.
+  if (bytes >= windowsUnixPathMax) {
+    throw new Error(
+      `DSHX local IPC path is ${bytes} UTF-8 bytes; Windows AF_UNIX requires fewer than ${windowsUnixPathMax}. ` +
+      'Set DSHX_TUI_HOME to a shorter path under your user profile and retry.'
+    );
+  }
 }
 
 function waitForBridgeReady(lines, child, stderrText) {
@@ -128,7 +146,7 @@ export async function startDshxLocalServer({
   const ctx = runtime ?? await bootRuntime({ cwd });
   const rendezvousRoot = path.resolve(socketRoot ?? defaultSocketRoot({ home }));
   const socketDirectory = createSocketDirectory(rendezvousRoot);
-  const socketPath = path.join(socketDirectory, 'app.sock');
+  const socketPath = path.join(socketDirectory, 's');
   const args = bridgeArgs ?? [socketPath];
   let bridge;
   let lines;
@@ -137,6 +155,7 @@ export async function startDshxLocalServer({
   let stderr = '';
 
   try {
+    assertSocketPathSupported(socketPath);
     bridge = spawnBridge(bridgeCommand, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -238,6 +257,8 @@ export async function startDshxLocalServer({
 }
 
 export const localServerInternals = {
+  WINDOWS_UNIX_PATH_MAX,
   defaultSocketRoot,
-  createSocketDirectory
+  createSocketDirectory,
+  assertSocketPathSupported
 };
