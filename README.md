@@ -92,9 +92,9 @@ The release tarball already contains the matching native `dshx-tui` and `dshx-ip
 
 ## Build from source
 
-Source builds are for contributors and DSHX development. Requirements: Node.js 20+, Rust/Cargo, Git and the platform toolchain required by the pinned Codex workspace.
+Source builds are for contributors and DSHX development. The pinned DSH runtime supports Node.js `^22.19.0 || >=24.0.0`; DSHX 1.0 standardizes dependency freezing, CI and release builds on **Node.js 24 LTS / npm 11**. Rust/Cargo, Git and the platform toolchain required by the pinned Codex workspace are also required for native TUI builds.
 
-The release dependency graph is frozen outside CI so GitHub Actions never mutates the candidate branch. On a trusted Node 20 machine with npm-registry access, generate and verify the lock with:
+The release dependency graph is frozen outside CI so GitHub Actions never mutates the candidate branch. On a trusted Node 24 LTS machine with npm-registry access, generate and verify the lock with:
 
 ```bash
 npm run freeze:deps
@@ -124,11 +124,11 @@ dshx doctor
 dshx
 ```
 
-`dshx doctor` checks Node, the packaged TUI, the local IPC data plane, the official DSH composition and the isolated DSHX presentation home.
+`dshx doctor` checks the DSH-compatible Node runtime, the packaged TUI, the local IPC data plane, the official DSH composition and the isolated DSHX presentation home/IPC path.
 
 ## Release model
 
-GitHub Actions is an automation surface rather than the authority for repository correctness. Ordinary PR/main CI is deliberately lean: one Node 20 core job followed by one Linux TUI job. `release/**` adds real Windows ConPTY and macOS PTY/CJK/resize gates. Only `v*` tags run the full platform packaging, clean-install, provenance, checksum and publication matrix.
+GitHub Actions is an automation surface rather than the authority for repository correctness. Ordinary PR/main CI is deliberately lean: one Node 24 core job followed by one Linux TUI job. `release/**` adds real Windows ConPTY and macOS PTY/CJK/resize gates. Only `v*` tags run the full platform packaging, clean-install, provenance, checksum and publication matrix.
 
 The release workflow builds platform-specific installable tarballs from the frozen npm graph, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises Linux/macOS PTY and Windows ConPTY real-TUI gates, verifies cross-platform provenance, and publishes SHA-256 checksums for both tarballs and provenance sidecars. Release candidates containing `-` in the tag are published as prereleases.
 
