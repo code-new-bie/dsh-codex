@@ -33,7 +33,11 @@ jobs:
       - name: Verify macOS local IPC data plane
         shell: bash
         run: dist/bin/dshx-ipc-bridge --check
-      - name: Install PTY test driver
-        run: python3 -m pip install --user pexpect
       - name: Exercise real TUI through macOS PTY + CJK + resize
-        run: python3 test/tui_smoke.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/dshx-pty-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
+          "$VENV/bin/python" test/tui_smoke.py
