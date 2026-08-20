@@ -1,0 +1,39 @@
+name: macOS TUI Smoke
+
+on:
+  push:
+    branches: [main, 'work/**', 'agent/**', 'release/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-tui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pty:
+    name: macOS PTY / pinned Codex TUI / local IPC
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install frozen dependency graph
+        run: npm ci
+      - name: Verify exact DeepSeek Harness release closure
+        run: node scripts/verify-dsh-closure.mjs
+      - name: Build pinned Codex TUI + local IPC bridge
+        shell: bash
+        run: bash scripts/build-codex-tui.sh
+      - name: Verify macOS local IPC data plane
+        shell: bash
+        run: dist/bin/dshx-ipc-bridge --check
+      - name: Install PTY test driver
+        run: python3 -m pip install --user pexpect
+      - name: Exercise real TUI through macOS PTY + CJK + resize
+        run: python3 test/tui_smoke.py
