@@ -201,6 +201,7 @@ export async function startDshxLocalServer({
   let lines;
   let adapter;
   let closing = false;
+  let closePromise;
   let stderr = '';
 
   const send = (message) => {
@@ -286,24 +287,56 @@ export async function startDshxLocalServer({
     if (!closing) log(`IPC bridge exited unexpectedly (${signal ?? code ?? 'unknown'})`);
   });
 
-  const close = async () => {
-    if (closing) return;
+  const close = () => {
+    if (closePromise) return closePromise;
     closing = true;
-    lines?.close();
-    try {
-      await adapter?.close?.();
-    } finally {
-      if (bridge.stdin?.writable) bridge.stdin.end();
-      await waitForExit(bridge);
-      if (bridge.exitCode === null && bridge.signalCode === null) bridge.kill('SIGKILL');
+    closePromise = (async () => {
+      let primaryError;
+      const capture = (scope, error) => {
+        if (!primaryError) {
+          primaryError = error;
+          return;
+        }
+        cleanupDiagnostic(log, `shutdown cleanup: ${scope}`, error);
+      };
+
+      try {
+        lines?.close();
+      } catch (error) {
+        capture('readline cleanup failed', error);
+      }
+
+      try {
+        await adapter?.close?.();
+      } catch (error) {
+        capture('adapter close failed', error);
+      }
+
+      try {
+        if (bridge?.stdin?.writable) bridge.stdin.end();
+        await waitForExit(bridge);
+        if (bridge && bridge.exitCode === null && bridge.signalCode === null) bridge.kill?.('SIGKILL');
+      } catch (error) {
+        capture('bridge cleanup failed', error);
+      }
+
       try {
         await ctx?.dispose?.();
-      } finally {
-        // The rendezvous directory is presentation transport state only. Its
-        // cleanup must not depend on successful DSH runtime disposal.
-        if (socketDirectory) fs.rmSync(socketDirectory, { recursive: true, force: true });
+      } catch (error) {
+        capture('DSH dispose failed', error);
       }
-    }
+
+      if (socketDirectory) {
+        try {
+          fs.rmSync(socketDirectory, { recursive: true, force: true });
+        } catch (error) {
+          capture('rendezvous cleanup failed', error);
+        }
+      }
+
+      if (primaryError) throw primaryError;
+    })();
+    return closePromise;
   };
 
   return {
