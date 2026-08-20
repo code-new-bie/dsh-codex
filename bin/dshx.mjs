@@ -5,8 +5,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
-import { dshxRuntimeEntries } from '../src/dsh/runtime-boot.mjs';
+import { parseCliInvocation } from '../src/cli/arguments.mjs';
+import { isSupportedNodeVersion } from '../src/cli/runtime.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -40,68 +40,93 @@ function dshxTuiHome() {
   return path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'));
 }
 
-function parseLaunchArgs(args) {
-  if (args[0] !== 'resume') return { tuiArgs: args, resumeEnv: {} };
-  const rest = args.slice(1);
-  if (rest.length === 0) return { tuiArgs: [], resumeEnv: { DSHX_RESUME_MODE: 'picker' } };
-  if (rest.length === 1 && rest[0] === '--last') {
-    return { tuiArgs: [], resumeEnv: { DSHX_RESUME_MODE: 'last' } };
-  }
-  if (rest.length === 1 && !rest[0].startsWith('-')) {
-    return {
-      tuiArgs: [],
-      resumeEnv: { DSHX_RESUME_MODE: 'id', DSHX_RESUME_SESSION_ID: rest[0] }
-    };
-  }
-  throw new Error('Usage: dshx resume [--last|<session>]');
+function commandDetail(command, result) {
+  if (result.status === 0) return (result.stdout || result.stderr).trim();
+  if (result.error) return `${command} failed: ${result.error.message}`;
+  return `${command} is not runnable${result.stderr ? `: ${result.stderr.trim()}` : ''}`;
 }
 
-function doctor() {
+function presentationHomeCheck(localServerInternals, loadError) {
+  const home = dshxTuiHome();
+  try {
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    const stat = fs.statSync(home);
+    if (!stat.isDirectory()) throw new Error('path exists but is not a directory');
+    fs.accessSync(home, fs.constants.R_OK | fs.constants.W_OK);
+    if (!localServerInternals) {
+      throw new Error(`IPC policy unavailable because DSH modules failed to load: ${loadError}`);
+    }
+
+    // On Windows this also enforces that a custom DSHX_TUI_HOME stays below
+    // the current user's profile ACL boundary. Probe the fixed suffix used by
+    // the real random rendezvous directory so an obviously-too-long home fails
+    // in doctor before a runtime boot is attempted.
+    const socketRoot = localServerInternals.defaultSocketRoot({ home });
+    const probeSocket = path.join(socketRoot, 'd-XXXXXX', 's');
+    localServerInternals.assertSocketPathSupported(probeSocket);
+    return { ok: true, detail: home };
+  } catch (error) {
+    return { ok: false, detail: `${home}: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+async function doctor() {
   const executable = packagedTuiBinary();
   const tuiCheck = executable && fs.existsSync(executable)
     ? spawnSync(executable, ['--version'], { encoding: 'utf8' })
-    : { status: 127, stdout: '', stderr: '' };
+    : { status: 127, stdout: '', stderr: '', error: null };
   const bridge = packagedIpcBridgeBinary();
   const bridgeCheck = bridge && fs.existsSync(bridge)
     ? spawnSync(bridge, ['--check'], { encoding: 'utf8' })
-    : { status: 127, stdout: '', stderr: '' };
+    : { status: 127, stdout: '', stderr: '', error: null };
+
+  let localServerInternals;
+  let dshxRuntimeEntries;
+  let runtimeLoadError;
+  try {
+    const [localServer, runtimeBoot] = await Promise.all([
+      import('../src/dsh/local-server.mjs'),
+      import('../src/dsh/runtime-boot.mjs')
+    ]);
+    localServerInternals = localServer.localServerInternals;
+    dshxRuntimeEntries = runtimeBoot.dshxRuntimeEntries;
+  } catch (error) {
+    runtimeLoadError = error instanceof Error ? error.message : String(error);
+  }
+  const homeCheck = presentationHomeCheck(localServerInternals, runtimeLoadError);
 
   let runtimeDetail;
   let runtimeOk = false;
-  try {
-    const entries = dshxRuntimeEntries();
-    const required = ['llm', 'session', 'agent', 'permission', 'approval', 'user-questions', 'tools'];
-    const ids = new Set(entries.filter((entry) => !entry.disabled).map((entry) => entry.id));
-    const missing = required.filter((id) => !ids.has(id));
-    if (missing.length > 0) throw new Error(`missing official bundle entries: ${missing.join(', ')}`);
-    runtimeDetail = `official DSH bundle composition (${entries.length} entries)`;
-    runtimeOk = true;
-  } catch (error) {
-    runtimeDetail = error instanceof Error ? error.message : String(error);
+  if (!dshxRuntimeEntries) {
+    runtimeDetail = `official DSH modules failed to load: ${runtimeLoadError ?? 'unknown error'}`;
+  } else {
+    try {
+      const entries = dshxRuntimeEntries();
+      const required = ['llm', 'session', 'agent', 'permission', 'approval', 'user-questions', 'tools'];
+      const ids = new Set(entries.filter((entry) => !entry.disabled).map((entry) => entry.id));
+      const missing = required.filter((id) => !ids.has(id));
+      if (missing.length > 0) throw new Error(`missing official bundle entries: ${missing.join(', ')}`);
+      runtimeDetail = `official DSH bundle composition (${entries.length} entries)`;
+      runtimeOk = true;
+    } catch (error) {
+      runtimeDetail = error instanceof Error ? error.message : String(error);
+    }
   }
 
   const rows = [
-    ['Node', process.version, Number(process.versions.node.split('.')[0]) >= 20],
+    ['Node', `${process.version} (required: ${PACKAGE.engines.node})`, isSupportedNodeVersion(process.versions.node)],
     [
       'Pinned Codex TUI',
-      tuiCheck.status === 0
-        ? (tuiCheck.stdout || tuiCheck.stderr).trim()
-        : executable
-          ? `${executable} is not built/runnable${tuiCheck.stderr ? `: ${tuiCheck.stderr.trim()}` : ''}`
-          : 'not found',
+      tuiCheck.status === 0 ? commandDetail(executable, tuiCheck) : (executable ? commandDetail(executable, tuiCheck) : 'not found'),
       tuiCheck.status === 0
     ],
     [
       'Local IPC bridge',
-      bridgeCheck.status === 0
-        ? `${bridge} (cross-platform Codex UDS)`
-        : bridge
-          ? `${bridge} is not built/runnable${bridgeCheck.stderr ? `: ${bridgeCheck.stderr.trim()}` : ''}`
-          : 'not found',
+      bridgeCheck.status === 0 ? `${bridge} (cross-platform Codex UDS)` : (bridge ? commandDetail(bridge, bridgeCheck) : 'not found'),
       bridgeCheck.status === 0
     ],
     ['DeepSeek Harness', runtimeDetail, runtimeOk],
-    ['Presentation home', dshxTuiHome(), true]
+    ['Presentation home / IPC path', homeCheck.detail, homeCheck.ok]
   ];
   for (const [name, detail, ok] of rows) {
     process.stdout.write(`${ok ? '✓' : '✗'} ${name}: ${detail}\n`);
@@ -118,25 +143,41 @@ function doctor() {
 
 async function run() {
   const args = process.argv.slice(2);
-  if (args.includes('--help') || args.includes('-h')) {
-    process.stdout.write(usage());
-    return;
-  }
-  if (args.includes('--version') || args.includes('-V')) {
-    process.stdout.write(`${VERSION}\n`);
-    return;
-  }
-  if (args[0] === 'doctor') {
-    doctor();
-    return;
-  }
-
-  let launch;
+  let invocation;
   try {
-    launch = parseLaunchArgs(args);
+    invocation = parseCliInvocation(args);
   } catch (error) {
     process.stderr.write(`dshx: ${error.message}\n`);
     process.exitCode = 2;
+    return;
+  }
+
+  if (invocation.kind === 'help') {
+    process.stdout.write(usage());
+    return;
+  }
+  if (invocation.kind === 'version') {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+  if (invocation.kind === 'doctor') {
+    await doctor();
+    return;
+  }
+
+  if (!isSupportedNodeVersion(process.versions.node)) {
+    process.stderr.write(`dshx: unsupported Node ${process.version}; pinned DeepSeek Harness requires ${PACKAGE.engines.node}\n`);
+    process.stderr.write('Use Node 24 LTS for the DSHX 1.0 release baseline.\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  let startDshxLocalServer;
+  try {
+    ({ startDshxLocalServer } = await import('../src/dsh/local-server.mjs'));
+  } catch (error) {
+    process.stderr.write(`dshx: failed to load official DeepSeek Harness runtime: ${error instanceof Error ? error.message : error}\n`);
+    process.exitCode = 1;
     return;
   }
 
@@ -181,19 +222,31 @@ async function run() {
     return;
   }
 
-  const child = spawn(executable, launch.tuiArgs, {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      // Do not inherit CODEX_HOME: DSHX uses Codex code as a presentation
-      // component only and must not read/write the user's ordinary Codex state.
-      CODEX_HOME: tuiHome,
-      ...launch.resumeEnv,
-      DSHX_APP_SERVER_ENDPOINT: local.url
-    },
-    stdio: 'inherit',
-    windowsHide: false
-  });
+  let child;
+  try {
+    child = spawn(executable, invocation.tuiArgs, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        // Do not inherit CODEX_HOME: DSHX uses Codex code as a presentation
+        // component only and must not read/write the user's ordinary Codex state.
+        CODEX_HOME: tuiHome,
+        ...invocation.resumeEnv,
+        DSHX_APP_SERVER_ENDPOINT: local.url
+      },
+      stdio: 'inherit',
+      windowsHide: false
+    });
+  } catch (error) {
+    process.stderr.write(`dshx: failed to launch pinned Codex TUI: ${error instanceof Error ? error.message : error}\n`);
+    try {
+      await local.close();
+    } catch (cleanupError) {
+      if (debug) process.stderr.write(`[dshx] startup cleanup: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}\n`);
+    }
+    process.exitCode = 127;
+    return;
+  }
 
   let closing = false;
   const close = async (exitCode) => {
@@ -202,7 +255,8 @@ async function run() {
     try {
       await local.close();
     } catch (error) {
-      if (debug) process.stderr.write(`[dshx] shutdown: ${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(`dshx: shutdown cleanup failed: ${error instanceof Error ? error.message : error}\n`);
+      if (exitCode === 0) exitCode = 1;
     }
     process.exitCode = exitCode;
   };
@@ -216,11 +270,17 @@ async function run() {
     await close(code ?? (signal ? 1 : 0));
   });
 
-  // SIGTERM is a process-lifecycle signal. Do not intercept SIGINT: Ctrl+C is
-  // an in-TUI interaction used by Codex to interrupt the active DSH turn.
+  // Process-lifecycle signals are forwarded to the TUI. Do not intercept
+  // SIGINT: Ctrl+C is an in-TUI interaction used by Codex to interrupt the
+  // active DSH turn.
   process.once('SIGTERM', () => {
     if (!child.killed) child.kill('SIGTERM');
   });
+  if (process.platform !== 'win32') {
+    process.once('SIGHUP', () => {
+      if (!child.killed) child.kill('SIGHUP');
+    });
+  }
 }
 
 await run();

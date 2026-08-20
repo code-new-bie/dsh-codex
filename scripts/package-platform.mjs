@@ -2,11 +2,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const sourceLockPath = path.join(root, 'package-lock.json');
+if (!fs.existsSync(sourceLockPath)) {
+  throw new Error('Missing frozen package-lock.json; freeze the RC dependency graph before packaging');
+}
+const sourceLockBytes = fs.readFileSync(sourceLockPath);
+const sourceLockSha256 = createHash('sha256').update(sourceLockBytes).digest('hex');
+const sourceLock = JSON.parse(sourceLockBytes.toString('utf8'));
+const sourceLockRoot = sourceLock.packages?.[''];
+if (!sourceLockRoot) throw new Error('Frozen package-lock.json has no root package record');
+
 const version = process.env.DSHX_VERSION || rootPackage.version;
 const platform = process.platform;
 const arch = process.arch;
@@ -20,6 +31,9 @@ if (!fs.existsSync(tuiSource)) {
 if (!fs.existsSync(bridgeSource)) {
   throw new Error(`Missing built IPC bridge at ${bridgeSource}; build the pinned Codex transport bridge first`);
 }
+
+assertDependencyMap('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
+assertDependencyMap('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
 
 const releaseRoot = path.join(root, '.release');
 const stage = path.join(releaseRoot, `dshx-${platform}-${arch}`);
@@ -40,9 +54,11 @@ function copy(relative) {
 // stubs remain source-tree development fixtures and are deliberately excluded
 // from installable artifacts.
 copy('bin/dshx.mjs');
+copy('src/cli');
 copy('src/dsh');
 copy('src/protocol');
 copy('config');
+copy('README.md');
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
 copy('upstream/DSH_COMMIT');
@@ -70,17 +86,19 @@ const packageJson = {
   license: 'Apache-2.0',
   os: [platform],
   cpu: [arch],
-  engines: { node: '>=20' },
+  engines: rootPackage.engines,
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
     'bin/dshx.mjs',
+    'src/cli',
     'src/dsh',
     'src/protocol',
     'config',
     'dist/bin',
     'upstream',
+    'README.md',
     'LICENSE',
     'NOTICE',
     'npm-shrinkwrap.json'
@@ -89,30 +107,47 @@ const packageJson = {
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
 // Every relative import in the release closure must resolve inside the staged
-// package. This prevents a source-tree-only helper from leaking into 1.0.
+// package. Cover static `from`, side-effect `import`, and dynamic `import()` so
+// a source-tree-only helper cannot hide behind a lazy code path and leak into
+// 1.0 packaging.
+const localImportPattern = /(?:from\s+|import\s*(?:\(\s*)?)["'](\.{1,2}\/[^"']+)["']/g;
 for (const file of walkJs(stage)) {
   const source = fs.readFileSync(file, 'utf8');
-  for (const match of source.matchAll(/(?:from\s+|import\s*)['\"](\.{1,2}\/[^'\"]+)['\"]/g)) {
+  for (const match of source.matchAll(localImportPattern)) {
     const target = resolveLocalImport(path.dirname(file), match[1]);
     if (!target) throw new Error(`Release package has unresolved local import ${match[1]} from ${path.relative(stage, file)}`);
   }
 }
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-execFileSync(npm, [
-  'install',
-  '--package-lock-only',
-  '--ignore-scripts',
-  '--no-audit',
-  '--no-fund'
-], { cwd: stage, stdio: 'inherit' });
+// npm-shrinkwrap.json is the publishable form of package-lock.json. Derive the
+// artifact lock from the trusted source lock so packaging cannot silently
+// resolve a different transitive graph. The source lock may contain dev-only
+// nodes for repository tests; the publishable root deliberately exposes only
+// production dependencies, so those nodes are not reachable from the shipped
+// package even though their resolved records remain frozen in the lockfile.
+const shrinkwrap = structuredClone(sourceLock);
+shrinkwrap.name = packageJson.name;
+shrinkwrap.version = packageJson.version;
+const shrinkwrapRoot = shrinkwrap.packages[''];
+shrinkwrapRoot.name = packageJson.name;
+shrinkwrapRoot.version = packageJson.version;
+shrinkwrapRoot.license = packageJson.license;
+shrinkwrapRoot.os = packageJson.os;
+shrinkwrapRoot.cpu = packageJson.cpu;
+shrinkwrapRoot.engines = packageJson.engines;
+shrinkwrapRoot.bin = packageJson.bin;
+shrinkwrapRoot.dependencies = packageJson.dependencies;
+delete shrinkwrapRoot.devDependencies;
+const shrinkwrapPath = path.join(stage, 'npm-shrinkwrap.json');
+fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
+
 execFileSync(process.execPath, [
   path.join(root, 'scripts', 'verify-dsh-closure.mjs'),
   stage,
-  path.join(stage, 'package-lock.json')
+  shrinkwrapPath
 ], { cwd: root, stdio: 'inherit' });
-fs.renameSync(path.join(stage, 'package-lock.json'), path.join(stage, 'npm-shrinkwrap.json'));
 
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const packOutput = execFileSync(
   npm,
   ['pack', stage, '--pack-destination', out, '--json'],
@@ -139,10 +174,20 @@ const metadata = {
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
   transport: 'local-uds-via-stdio-bridge',
+  dependencyGraph: 'source-package-lock',
+  sourceLockSha256,
   tarball: path.basename(targetTarball)
 };
 fs.writeFileSync(`${targetTarball}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
 process.stdout.write(`${targetTarball}\n`);
+
+function assertDependencyMap(label, actual = {}, expected = {}) {
+  const actualEntries = Object.entries(actual).sort(([a], [b]) => a.localeCompare(b));
+  const expectedEntries = Object.entries(expected).sort(([a], [b]) => a.localeCompare(b));
+  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error(`Frozen package-lock.json ${label} does not match package.json`);
+  }
+}
 
 function* walkJs(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {

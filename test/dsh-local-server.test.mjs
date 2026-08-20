@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, win32 } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { localServerInternals, startDshxLocalServer } from '../src/dsh/local-server.mjs';
@@ -83,7 +83,7 @@ test('Windows default local IPC root is anchored below DSHX user presentation ho
     temporaryDirectory: 'C:\\shared-temp',
     userHome: 'C:\\Users\\Alice'
   });
-  assert.equal(root, resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'ipc'));
+  assert.equal(root, win32.resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'i'));
   assert.doesNotMatch(root.toLowerCase(), /shared-temp/);
 });
 
@@ -93,7 +93,41 @@ test('Windows fallback IPC root remains below the current user home when no pres
     temporaryDirectory: 'C:\\shared-temp',
     userHome: 'C:\\Users\\Alice'
   });
-  assert.equal(root, resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'ipc'));
+  assert.equal(root, win32.resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'i'));
+});
+
+test('Windows custom presentation home cannot escape the current user profile ACL boundary', () => {
+  assert.throws(() => localServerInternals.defaultSocketRoot({
+    platform: 'win32',
+    home: 'C:\\shared-temp\\dshx',
+    userHome: 'C:\\Users\\Alice'
+  }), /must remain under the Windows user profile/);
+  assert.throws(() => localServerInternals.defaultSocketRoot({
+    platform: 'win32',
+    home: 'D:\\dshx',
+    userHome: 'C:\\Users\\Alice'
+  }), /must remain under the Windows user profile/);
+  assert.equal(
+    localServerInternals.isPathWithin('C:\\Users\\Alice', 'c:\\users\\alice\\.dshx', win32),
+    true
+  );
+});
+
+test('Windows local IPC path guard measures UTF-8 bytes and reserves the terminating NUL', () => {
+  const max = localServerInternals.WINDOWS_UNIX_PATH_MAX;
+  assert.equal(max, 108);
+  assert.doesNotThrow(() => localServerInternals.assertSocketPathSupported(
+    `C:\\${'a'.repeat(104)}`,
+    { platform: 'win32' }
+  ));
+  assert.throws(() => localServerInternals.assertSocketPathSupported(
+    `C:\\${'a'.repeat(105)}`,
+    { platform: 'win32' }
+  ), /requires fewer than 108/);
+  assert.throws(() => localServerInternals.assertSocketPathSupported(
+    `C:\\${'你'.repeat(35)}`,
+    { platform: 'win32' }
+  ), /108 UTF-8 bytes/);
 });
 
 test('Unix default local IPC root stays in tmp; createSocketDirectory enforces an ephemeral subdirectory', () => {
@@ -101,7 +135,7 @@ test('Unix default local IPC root stays in tmp; createSocketDirectory enforces a
   try {
     assert.equal(localServerInternals.defaultSocketRoot({ platform: 'linux', temporaryDirectory: root }), root);
     const child = localServerInternals.createSocketDirectory(root);
-    assert.match(child, /^.*dshx-/);
+    assert.match(child, /^.*d-/);
     assert.notEqual(child, root);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -131,6 +165,129 @@ test('local production transport exposes only a unix endpoint and relays RPC ove
   }
   assert.equal(FakeAdapter.closes, 1);
   assert.equal(disposed, 1);
+});
+
+test('startup rollback disposes DSH, terminates the bridge, and removes rendezvous state when Adapter construction fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-adapter-startup-test-'));
+  const fake = fakeBridgeSpawner();
+  let disposed = 0;
+  class ThrowingAdapter {
+    constructor() {
+      throw new Error('synthetic Adapter constructor failure');
+    }
+  }
+  const runtime = { async dispose() { disposed += 1; } };
+  try {
+    await assert.rejects(startDshxLocalServer({
+      runtime,
+      Adapter: ThrowingAdapter,
+      bridgeCommand: 'fake-dshx-ipc-bridge',
+      spawnBridge: (...args) => fake.spawn(...args),
+      socketRoot: root
+    }), /synthetic Adapter constructor failure/);
+    assert.equal(disposed, 1);
+    assert.ok(fake.child().exitCode !== null || fake.child().signalCode !== null);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('startup rollback removes the rendezvous directory when official DSH boot fails before bridge spawn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-boot-startup-test-'));
+  let spawnCount = 0;
+  try {
+    await assert.rejects(startDshxLocalServer({
+      bootRuntime: async () => {
+        throw new Error('synthetic DSH boot failure');
+      },
+      spawnBridge: () => {
+        spawnCount += 1;
+        return new FakeChild();
+      },
+      socketRoot: root
+    }), /synthetic DSH boot failure/);
+    assert.equal(spawnCount, 0);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('startup rollback disposes an injected runtime when socket-root creation fails and preserves the filesystem error', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'dshx-ipc-root-failure-test-'));
+  const blockedRoot = join(parent, 'not-a-directory');
+  writeFileSync(blockedRoot, 'block mkdir');
+  let disposed = 0;
+  const runtime = { async dispose() { disposed += 1; } };
+  try {
+    await assert.rejects(startDshxLocalServer({
+      runtime,
+      socketRoot: blockedRoot
+    }), (error) => {
+      assert.ok(['EEXIST', 'ENOTDIR'].includes(error?.code), `unexpected error code: ${error?.code}`);
+      return true;
+    });
+    assert.equal(disposed, 1);
+    assert.equal(existsSync(blockedRoot), true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('startup rollback keeps the original failure when DSH disposal also fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-double-failure-test-'));
+  const fake = fakeBridgeSpawner();
+  const logs = [];
+  class ThrowingAdapter {
+    constructor() {
+      throw new Error('primary startup failure');
+    }
+  }
+  const runtime = {
+    async dispose() {
+      throw new Error('secondary dispose failure');
+    }
+  };
+  try {
+    await assert.rejects(startDshxLocalServer({
+      runtime,
+      Adapter: ThrowingAdapter,
+      bridgeCommand: 'fake-dshx-ipc-bridge',
+      spawnBridge: (...args) => fake.spawn(...args),
+      socketRoot: root,
+      log: (message) => logs.push(message)
+    }), /primary startup failure/);
+    assert.ok(logs.some((message) => message.includes('startup rollback: DSH dispose failed: secondary dispose failure')));
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('close removes the private rendezvous directory even when DSH disposal fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-close-test-'));
+  const fake = fakeBridgeSpawner();
+  const runtime = {
+    async dispose() {
+      throw new Error('synthetic DSH dispose failure');
+    }
+  };
+  const server = await startDshxLocalServer({
+    runtime,
+    Adapter: FakeAdapter,
+    bridgeCommand: 'fake-dshx-ipc-bridge',
+    spawnBridge: (...args) => fake.spawn(...args),
+    socketRoot: root
+  });
+  const rendezvousDirectory = dirname(server.path);
+  assert.equal(existsSync(rendezvousDirectory), true);
+  try {
+    await assert.rejects(server.close(), /synthetic DSH dispose failure/);
+    assert.equal(existsSync(rendezvousDirectory), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('local production transport returns JSON-RPC parse errors through bridge stdio', async () => {

@@ -23,7 +23,12 @@ const packages = lock.packages ?? {};
 const mismatches = [];
 let count = 0;
 for (const [location, record] of Object.entries(packages)) {
-  if (!/(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-|$)/.test(location)) continue;
+  // package-lock `packages` keys identify the package by the final
+  // node_modules segment. Match only the actual @deepseek-ai/dsh* record,
+  // never an arbitrary transitive dependency nested below a DSH package.
+  // Example that must NOT match:
+  // node_modules/@deepseek-ai/dsh-client-ui-trajectory/node_modules/react
+  if (!/(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/.test(location)) continue;
   if (!record || typeof record.version !== 'string') continue;
   count += 1;
   if (record.version !== expected) {

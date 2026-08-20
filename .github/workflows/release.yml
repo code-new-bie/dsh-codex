@@ -28,10 +28,27 @@ jobs:
           - os: macos-26-intel
             label: macos-x64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 24
+      - name: Enforce release tag lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" == v1.0.0-rc.* ]]; then
+            expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/release/1.0-rc" --jq .object.sha)"
+            source_ref='release/1.0-rc'
+          else
+            expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            source_ref='main'
+          fi
+          if [[ "$GITHUB_SHA" != "$expected" ]]; then
+            echo "release tag $GITHUB_REF_NAME must point at the current $source_ref head: expected=$expected actual=$GITHUB_SHA" >&2
+            exit 1
+          fi
       - name: Enforce stable 1.0 promotion ledger
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,14 +70,6 @@ jobs:
             echo 'stable 1.0 is blocked: PR #11 has not been merged' >&2
             exit 1
           fi
-          relation="$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...main" --jq .status)"
-          case "$relation" in
-            identical|ahead) ;;
-            *)
-              echo "stable 1.0 is blocked: tag commit $GITHUB_SHA is not contained in main (compare status: $relation)" >&2
-              exit 1
-              ;;
-          esac
       - name: Resolve release version (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -69,9 +78,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_ENV -Value "DSHX_VERSION=$($env:GITHUB_REF_NAME.TrimStart('v'))"
-      - name: Test presentation adapter
+      - name: Test presentation adapter from frozen graph
         run: |
-          npm install
+          npm ci
           node scripts/verify-dsh-closure.mjs
           npm test
       - name: Boot official DSH runtime
@@ -94,12 +103,15 @@ jobs:
         run: |
           & .\dist\bin\dshx-ipc-bridge.exe --check
           if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
-      - name: Real pinned TUI local-IPC PTY smoke
-        if: runner.os == 'Linux'
+      - name: Real pinned TUI local-IPC PTY + CJK + resize smoke
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          python3 -m pip install --user pexpect
-          python3 test/tui_smoke.py
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/dshx-pty-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
+          "$VENV/bin/python" test/tui_smoke.py
       - name: Install test-only Windows ConPTY bridge
         if: runner.os == 'Windows'
         shell: pwsh
@@ -136,7 +148,7 @@ jobs:
           $version = & (Join-Path $prefix 'dshx.cmd') --version
           if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
           & (Join-Path $prefix 'dshx.cmd') doctor
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dshx-${{ matrix.label }}
           path: |
@@ -149,15 +161,48 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           merge-multiple: true
+      - name: Verify cross-platform artifact provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+
+          files = sorted(glob.glob('artifacts/dshx-*.tgz.json'))
+          if len(files) != 4:
+              raise SystemExit(f'expected 4 platform provenance sidecars, found {len(files)}: {files}')
+          records = []
+          for filename in files:
+              with open(filename, encoding='utf-8') as handle:
+                  records.append((filename, json.load(handle)))
+          expected_version = os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          keys = ('version', 'dshVersion', 'codexCommit', 'dshCommit', 'transport', 'dependencyGraph', 'sourceLockSha256')
+          baseline = {key: records[0][1].get(key) for key in keys}
+          if baseline['version'] != expected_version:
+              raise SystemExit(f"artifact version mismatch: expected {expected_version}, got {baseline['version']}")
+          if baseline['dependencyGraph'] != 'source-package-lock':
+              raise SystemExit(f"unexpected dependency graph provenance: {baseline['dependencyGraph']}")
+          lock_hash = baseline['sourceLockSha256']
+          if not isinstance(lock_hash, str) or len(lock_hash) != 64 or any(ch not in '0123456789abcdef' for ch in lock_hash):
+              raise SystemExit(f'invalid source lock SHA-256: {lock_hash!r}')
+          for filename, record in records[1:]:
+              current = {key: record.get(key) for key in keys}
+              if current != baseline:
+                  raise SystemExit(f'cross-platform provenance mismatch in {filename}: {current} != {baseline}')
+          print(json.dumps(baseline, sort_keys=True))
+          PY
       - name: Create checksums
         shell: bash
         run: |
+          set -euo pipefail
           cd artifacts
-          sha256sum dshx-*.tgz > SHA256SUMS
+          sha256sum dshx-*.tgz dshx-*.tgz.json > SHA256SUMS
           cat SHA256SUMS
       - name: Create immutable GitHub release
         env:
