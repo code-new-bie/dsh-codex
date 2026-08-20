@@ -6,20 +6,23 @@ This file defines the evidence required before a DSHX release candidate may be p
 
 No item becomes green because code for the check exists. A release candidate is green only when the corresponding repository gate or CI job has passed for the exact candidate commit/tag and the result is recorded. GitHub Actions is an automation surface, not the authority for release correctness: runner-independent repository scripts are preferred wherever a check does not intrinsically require a hosted platform.
 
+The pinned DSH `0.1.0-rc.8` line requires Node `^22.19.0 || >=24.0.0`. DSHX 1.0 standardizes dependency freezing, CI and release artifact generation on **Node 24 LTS / npm 11** so all release evidence uses one supported toolchain.
+
 ## Automation tiers
 
-- **PR / main CI:** two Ubuntu jobs only. `Core / Node 20` runs first; `Linux TUI / pinned Codex / local IPC` runs only after Core passes.
+- **PR / main CI:** two Ubuntu jobs only. `Core / Node 24` runs first; `Linux TUI / pinned Codex / local IPC` runs only after Core passes.
 - **RC platform gate:** only `release/**` pushes (or manual dispatch) run real Windows ConPTY and macOS PTY/CJK/resize validation.
 - **Release tag:** `v*` runs the full platform packaging, clean-install, provenance, checksum and publication matrix.
-- **Dependency freeze:** never writes a branch from CI. Run `npm run freeze:deps` in a trusted Node 20 environment with npm-registry access, review the generated `package-lock.json`, then commit it. CI consumes it with `npm ci`.
+- **Dependency freeze:** never writes a branch from CI. Run `npm run freeze:deps` in a trusted Node 24 LTS / npm 11 environment with npm-registry access, review the generated `package-lock.json`, then commit it. CI consumes it with `npm ci`.
 
 ## Automated gates
 
 | Gate | Evidence implemented in repository | Required result for 1.0 |
 |---|---|---|
 | Zero-argument launch | `bin/dshx.mjs`, clean-install smoke | pass on supported release artifacts |
+| Supported Node runtime | package engine matches pinned DSH (`^22.19.0 || >=24.0.0`); release/freeze baseline Node 24 LTS | pass |
 | Official DSH composition | `scripts/runtime-smoke.mjs` | pass on exact candidate |
-| Frozen source dependency graph | checked-in `package-lock.json`; `npm run freeze:deps` resolves it with install scripts disabled | lock present, reviewed and no manifest drift |
+| Frozen source dependency graph | checked-in `package-lock.json`; `npm run freeze:deps` resolves it with install scripts disabled under Node 24/npm 11 | lock present, reviewed and no manifest drift |
 | Exact DSH dependency closure | `scripts/verify-dsh-closure.mjs`, source lock and release shrinkwrap | pass |
 | DSH ownership boundary | adapter/unit tests + `scripts/verify-ownership-boundary.mjs` | pass |
 | Approval/permission fail-closed | approval/permission/subagent authority tests | pass |
@@ -69,8 +72,8 @@ Any difference is either fixed, documented as a deliberate product difference in
 
 ## Promotion procedure
 
-1. In a trusted Node 20 environment with npm-registry access, run `npm run freeze:deps`; review and commit the generated `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`. Codex/DSH pins must not change during validation.
-2. Require the exact candidate to pass the lean `CI` workflow (`Core` then `Linux TUI`) and the `RC Platform Gate` (Windows ConPTY + macOS PTY). Equivalent runner-independent repository gates may be used for diagnosis, but platform acceptance must execute on the named platform.
+1. In a trusted Node 24 LTS / npm 11 environment with npm-registry access, run `npm run freeze:deps`; review and commit the generated `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`. Codex/DSH pins must not change during validation.
+2. Require the exact candidate to pass the lean `CI` workflow (`Core / Node 24` then `Linux TUI`) and the `RC Platform Gate` (Windows ConPTY + macOS PTY). Equivalent runner-independent repository gates may be used for diagnosis, but platform acceptance must execute on the named platform.
 3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass. The RC tag must point at the current `release/1.0-rc` head.
 4. Confirm each release sidecar identifies the same frozen source-lock SHA-256 and expected Codex/DSH pins.
 5. Run `scripts/windows-rc-acceptance.ps1` against the generated Windows release artifact and its published SHA-256, then use the printed installed launcher for the manual Windows Terminal/CJK/IME side-by-side acceptance run.
