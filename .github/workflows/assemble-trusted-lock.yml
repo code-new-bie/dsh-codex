@@ -45,3 +45,5 @@ jobs:
           git rm -r -- .dshx-lock-upload .github/workflows/assemble-trusted-lock.yml
           git commit -m 'chore: freeze trusted RC dependency graph'
           git push origin HEAD:prep/post-lock-rc
+
+# Trigger recorded after all eight trusted lock chunks are present.
