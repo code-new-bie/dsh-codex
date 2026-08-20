@@ -1,7 +1,7 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -4246,10 +4246,12 @@ dependencies = [
+@@ -4246,9 +4246,11 @@ dependencies = [
  "anyhow",
  "codex-uds",
  "codex-utils-cargo-bin",
