@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, win32 } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { localServerInternals, startDshxLocalServer } from '../src/dsh/local-server.mjs';
@@ -83,7 +83,7 @@ test('Windows default local IPC root is anchored below DSHX user presentation ho
     temporaryDirectory: 'C:\\shared-temp',
     userHome: 'C:\\Users\\Alice'
   });
-  assert.equal(root, resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'i'));
+  assert.equal(root, win32.resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'i'));
   assert.doesNotMatch(root.toLowerCase(), /shared-temp/);
 });
 
@@ -93,7 +93,24 @@ test('Windows fallback IPC root remains below the current user home when no pres
     temporaryDirectory: 'C:\\shared-temp',
     userHome: 'C:\\Users\\Alice'
   });
-  assert.equal(root, resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'i'));
+  assert.equal(root, win32.resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'i'));
+});
+
+test('Windows custom presentation home cannot escape the current user profile ACL boundary', () => {
+  assert.throws(() => localServerInternals.defaultSocketRoot({
+    platform: 'win32',
+    home: 'C:\\shared-temp\\dshx',
+    userHome: 'C:\\Users\\Alice'
+  }), /must remain under the Windows user profile/);
+  assert.throws(() => localServerInternals.defaultSocketRoot({
+    platform: 'win32',
+    home: 'D:\\dshx',
+    userHome: 'C:\\Users\\Alice'
+  }), /must remain under the Windows user profile/);
+  assert.equal(
+    localServerInternals.isPathWithin('C:\\Users\\Alice', 'c:\\users\\alice\\.dshx', win32),
+    true
+  );
 });
 
 test('Windows local IPC path guard measures UTF-8 bytes and reserves the terminating NUL', () => {
