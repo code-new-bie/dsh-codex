@@ -7,6 +7,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const sourceLockPath = path.join(root, 'package-lock.json');
+if (!fs.existsSync(sourceLockPath)) {
+  throw new Error('Missing frozen package-lock.json; freeze the RC dependency graph before packaging');
+}
+const sourceLock = JSON.parse(fs.readFileSync(sourceLockPath, 'utf8'));
+const sourceLockRoot = sourceLock.packages?.[''];
+if (!sourceLockRoot) throw new Error('Frozen package-lock.json has no root package record');
+
 const version = process.env.DSHX_VERSION || rootPackage.version;
 const platform = process.platform;
 const arch = process.arch;
@@ -20,6 +28,9 @@ if (!fs.existsSync(tuiSource)) {
 if (!fs.existsSync(bridgeSource)) {
   throw new Error(`Missing built IPC bridge at ${bridgeSource}; build the pinned Codex transport bridge first`);
 }
+
+assertDependencyMap('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
+assertDependencyMap('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
 
 const releaseRoot = path.join(root, '.release');
 const stage = path.join(releaseRoot, `dshx-${platform}-${arch}`);
@@ -73,6 +84,11 @@ const packageJson = {
   engines: { node: '>=20' },
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
+  // Keep the source manifest and publishable lock structurally aligned. npm
+  // does not install a package's devDependencies for consumers; keeping them
+  // here lets the published shrinkwrap be a version-adjusted copy of the
+  // trusted source lock instead of resolving a second dependency graph.
+  devDependencies: rootPackage.devDependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
     'bin/dshx.mjs',
@@ -98,21 +114,34 @@ for (const file of walkJs(stage)) {
   }
 }
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-execFileSync(npm, [
-  'install',
-  '--package-lock-only',
-  '--ignore-scripts',
-  '--no-audit',
-  '--no-fund'
-], { cwd: stage, stdio: 'inherit' });
+// npm-shrinkwrap.json is the publishable form of package-lock.json. Derive the
+// artifact lock from the trusted source lock so packaging cannot silently
+// resolve a different transitive graph. Only package identity/platform fields
+// differ between a source checkout and a platform release artifact.
+const shrinkwrap = structuredClone(sourceLock);
+shrinkwrap.name = packageJson.name;
+shrinkwrap.version = packageJson.version;
+const shrinkwrapRoot = shrinkwrap.packages[''];
+shrinkwrapRoot.name = packageJson.name;
+shrinkwrapRoot.version = packageJson.version;
+shrinkwrapRoot.license = packageJson.license;
+shrinkwrapRoot.os = packageJson.os;
+shrinkwrapRoot.cpu = packageJson.cpu;
+shrinkwrapRoot.engines = packageJson.engines;
+shrinkwrapRoot.bin = packageJson.bin;
+shrinkwrapRoot.dependencies = packageJson.dependencies;
+if (packageJson.devDependencies) shrinkwrapRoot.devDependencies = packageJson.devDependencies;
+else delete shrinkwrapRoot.devDependencies;
+const shrinkwrapPath = path.join(stage, 'npm-shrinkwrap.json');
+fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
+
 execFileSync(process.execPath, [
   path.join(root, 'scripts', 'verify-dsh-closure.mjs'),
   stage,
-  path.join(stage, 'package-lock.json')
+  shrinkwrapPath
 ], { cwd: root, stdio: 'inherit' });
-fs.renameSync(path.join(stage, 'package-lock.json'), path.join(stage, 'npm-shrinkwrap.json'));
 
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const packOutput = execFileSync(
   npm,
   ['pack', stage, '--pack-destination', out, '--json'],
@@ -139,10 +168,19 @@ const metadata = {
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
   transport: 'local-uds-via-stdio-bridge',
+  dependencyGraph: 'source-package-lock',
   tarball: path.basename(targetTarball)
 };
 fs.writeFileSync(`${targetTarball}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
 process.stdout.write(`${targetTarball}\n`);
+
+function assertDependencyMap(label, actual = {}, expected = {}) {
+  const actualEntries = Object.entries(actual).sort(([a], [b]) => a.localeCompare(b));
+  const expectedEntries = Object.entries(expected).sort(([a], [b]) => a.localeCompare(b));
+  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error(`Frozen package-lock.json ${label} does not match package.json`);
+  }
+}
 
 function* walkJs(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
