@@ -36,7 +36,7 @@ class LocalStubAdapter {
           error: response?.error?.message ?? null
         });
         for (const event of events) {
-          const threadId = event?.params?.threadId;
+          const threadId = event?.params?.threadId ?? event?.params?.thread?.id;
           const turnId = event?.params?.turnId ?? event?.params?.turn?.id;
           const belongsToActiveTurn =
             typeof threadId === 'string' &&
