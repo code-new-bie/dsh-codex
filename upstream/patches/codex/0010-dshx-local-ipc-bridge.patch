@@ -2,13 +2,13 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
 @@ -4254,9 +4254,11 @@ dependencies = [
-  "anyhow",
-  "codex-uds",
-  "codex-utils-cargo-bin",
+ "anyhow",
+ "codex-uds",
+ "codex-utils-cargo-bin",
 + "futures",
-  "pretty_assertions",
-  "tempfile",
-  "tokio",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
 + "tokio-tungstenite",
  ]
  
@@ -151,7 +151,7 @@ new file mode 100644
 diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 --- a/codex-rs/tui/src/main.rs
 +++ b/codex-rs/tui/src/main.rs
-@@ -72,19 +72,12 @@
+@@ -72,19 +72,13 @@
                  "DSHX_APP_SERVER_ENDPOINT is required; DSHX never falls back to the Codex agent runtime"
              )
          })?;
@@ -168,7 +168,8 @@ diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 -            RemoteAppServerEndpoint::UnixSocket { .. } => {
 -                anyhow::bail!("DSHX production launcher requires authenticated loopback WebSocket transport")
 -            }
-+        let dshx_endpoint = resolve_remote_addr(&dshx_endpoint)?;
++        let dshx_endpoint = resolve_remote_addr(&dshx_endpoint)
++            .map_err(|err| anyhow::anyhow!("{err:#}"))?;
 +        match &dshx_endpoint {
 +            RemoteAppServerEndpoint::WebSocket { .. } => anyhow::bail!(
 +                "DSHX production launcher forbids TCP WebSocket transport; use the packaged local IPC bridge"
