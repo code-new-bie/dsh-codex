@@ -103,7 +103,7 @@ function waitForBridgeReady(lines, child, stderrText) {
 }
 
 function waitForExit(child, timeoutMs = 750) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {
@@ -119,6 +119,27 @@ function waitForExit(child, timeoutMs = 750) {
     }, timeoutMs);
     child.once('exit', finish);
   });
+}
+
+async function cleanupFailedStartup({ lines, bridge, ctx, socketDirectory, log }) {
+  lines?.close();
+  if (bridge) {
+    try {
+      if (bridge.stdin?.writable) bridge.stdin.end();
+      if (bridge.exitCode === null && bridge.signalCode === null) bridge.kill?.('SIGTERM');
+      await waitForExit(bridge);
+      if (bridge.exitCode === null && bridge.signalCode === null) bridge.kill?.('SIGKILL');
+    } catch (error) {
+      log(`startup rollback: bridge cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  try {
+    await ctx?.dispose?.();
+  } catch (error) {
+    log(`startup rollback: DSH dispose failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (socketDirectory) fs.rmSync(socketDirectory, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -143,19 +164,36 @@ export async function startDshxLocalServer({
   spawnBridge = spawn,
   socketRoot
 } = {}) {
-  const ctx = runtime ?? await bootRuntime({ cwd });
   const rendezvousRoot = path.resolve(socketRoot ?? defaultSocketRoot({ home }));
-  const socketDirectory = createSocketDirectory(rendezvousRoot);
-  const socketPath = path.join(socketDirectory, 's');
-  const args = bridgeArgs ?? [socketPath];
+  let socketDirectory;
+  let socketPath;
+  let ctx = runtime;
   let bridge;
   let lines;
   let adapter;
   let closing = false;
   let stderr = '';
 
+  const send = (message) => {
+    if (!bridge?.stdin?.writable) throw new Error('DSHX IPC bridge stdin is not writable');
+    bridge.stdin.write(`${JSON.stringify(message)}\n`);
+  };
+  const safeSend = (message) => {
+    try {
+      send(message);
+      return true;
+    } catch (error) {
+      log(`IPC response send failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  };
+
   try {
+    socketDirectory = createSocketDirectory(rendezvousRoot);
+    socketPath = path.join(socketDirectory, 's');
     assertSocketPathSupported(socketPath);
+    ctx ??= await bootRuntime({ cwd });
+    const args = bridgeArgs ?? [socketPath];
     bridge = spawnBridge(bridgeCommand, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -168,27 +206,18 @@ export async function startDshxLocalServer({
     });
     lines = createInterface({ input: bridge.stdout, crlfDelay: Infinity });
     await waitForBridgeReady(lines, bridge, () => stderr);
+    adapter = new Adapter({
+      ctx,
+      cwd,
+      home,
+      version,
+      send,
+      diagnostics: log
+    });
   } catch (error) {
-    lines?.close();
-    bridge?.kill?.('SIGTERM');
-    fs.rmSync(socketDirectory, { recursive: true, force: true });
-    await ctx.dispose?.();
+    await cleanupFailedStartup({ lines, bridge, ctx, socketDirectory, log });
     throw error;
   }
-
-  const send = (message) => {
-    if (!bridge.stdin?.writable) throw new Error('DSHX IPC bridge stdin is not writable');
-    bridge.stdin.write(`${JSON.stringify(message)}\n`);
-  };
-
-  adapter = new Adapter({
-    ctx,
-    cwd,
-    home,
-    version,
-    send,
-    diagnostics: log
-  });
 
   lines.on('line', (line) => {
     void (async () => {
@@ -196,7 +225,7 @@ export async function startDshxLocalServer({
       try {
         message = JSON.parse(line);
       } catch (error) {
-        send(parseError(error));
+        safeSend(parseError(error));
         return;
       }
       if (message?.dshxBridge) {
@@ -206,12 +235,12 @@ export async function startDshxLocalServer({
       try {
         const handled = await adapter.handle(message);
         if (!handled) return;
-        send(handled.response);
+        if (!safeSend(handled.response)) return;
         await handled.afterResponse?.();
       } catch (error) {
         log(`request handling failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
         if (message?.id !== undefined) {
-          send({
+          safeSend({
             id: message.id,
             error: {
               code: -32603,
@@ -239,11 +268,11 @@ export async function startDshxLocalServer({
       await waitForExit(bridge);
       if (bridge.exitCode === null && bridge.signalCode === null) bridge.kill('SIGKILL');
       try {
-        await ctx.dispose?.();
+        await ctx?.dispose?.();
       } finally {
         // The rendezvous directory is presentation transport state only. Its
         // cleanup must not depend on successful DSH runtime disposal.
-        fs.rmSync(socketDirectory, { recursive: true, force: true });
+        if (socketDirectory) fs.rmSync(socketDirectory, { recursive: true, force: true });
       }
     }
   };
@@ -260,5 +289,6 @@ export const localServerInternals = {
   WINDOWS_UNIX_PATH_MAX,
   defaultSocketRoot,
   createSocketDirectory,
-  assertSocketPathSupported
+  assertSocketPathSupported,
+  cleanupFailedStartup
 };
