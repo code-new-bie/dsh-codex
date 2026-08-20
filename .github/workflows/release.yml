@@ -40,17 +40,14 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF_NAME" == v1.0.0-rc.* ]]; then
             expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/release/1.0-rc" --jq .object.sha)"
-            if [[ "$GITHUB_SHA" != "$expected" ]]; then
-              echo "RC tag must point at the current release/1.0-rc head: expected=$expected actual=$GITHUB_SHA" >&2
-              exit 1
-            fi
-          fi
-          if [[ "$GITHUB_REF_NAME" == "v1.0.0" ]]; then
+            source_ref='release/1.0-rc'
+          else
             expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-            if [[ "$GITHUB_SHA" != "$expected" ]]; then
-              echo "stable 1.0 tag must point at the current main head: expected=$expected actual=$GITHUB_SHA" >&2
-              exit 1
-            fi
+            source_ref='main'
+          fi
+          if [[ "$GITHUB_SHA" != "$expected" ]]; then
+            echo "release tag $GITHUB_REF_NAME must point at the current $source_ref head: expected=$expected actual=$GITHUB_SHA" >&2
+            exit 1
           fi
       - name: Enforce stable 1.0 promotion ledger
         env:
