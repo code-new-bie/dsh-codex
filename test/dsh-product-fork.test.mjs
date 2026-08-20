@@ -28,33 +28,35 @@ function adapterFixture({ cold = false } = {}) {
     }
   };
   const driverCalls = [];
-  let sourceDisposed = 0;
+  const hostCalls = [];
+  const adoptions = [];
   adapter.driver = {
     getLive(id) {
-      return !cold && id === source.id ? source : undefined;
+      driverCalls.push(['getLive', id]);
+      if (!cold && id === source.id) return source;
+      if (id === target.id) return target;
+      return undefined;
     },
-    async resume(id) {
+    async inspectSession(id) {
+      driverCalls.push(['inspectSession', id]);
       assert.equal(id, source.id);
-      driverCalls.push(['resume', id]);
-      return { agent: source, async dispose() { sourceDisposed += 1; } };
+      return { id, events: source.session.events };
     },
-    async fork(receivedSource, options) {
-      assert.equal(receivedSource, source);
-      driverCalls.push(['fork', options]);
-      return { agent: target, async dispose() {} };
+    adoptExternalSelection(agent, options) {
+      driverCalls.push(['adoptExternalSelection', agent.id]);
+      adoptions.push({ agent, options });
     }
   };
-  const presetSets = [];
-  adapter.permissions = {
-    current(agent) {
-      assert.equal(agent, source);
-      return { preset: 'workspace-write' };
+  adapter.hostApi = () => ({
+    async forkSession(options) {
+      hostCalls.push(['forkSession', options]);
+      return { sessionId: target.id };
     },
-    set(agent, preset) {
-      assert.equal(agent, target);
-      presetSets.push(preset);
+    async selectModel(options) {
+      hostCalls.push(['selectModel', options]);
+      return options;
     }
-  };
+  });
   adapter.installController = (handle) => {
     const controller = { agent: handle.agent };
     adapter.controllers.set(String(handle.agent.id), controller);
@@ -65,52 +67,55 @@ function adapterFixture({ cold = false } = {}) {
       id: String(agent.id),
       forkedFromId: source.id,
       turns: options.includeTurns ? ['history'] : []
-    },
-    model: 'dshx:model',
-    modelProvider: 'deepseek',
-    serviceTier: null,
-    cwd: process.cwd(),
-    runtimeWorkspaceRoots: [],
-    instructionSources: [],
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
-    sandbox: { type: 'externalSandbox', networkAccess: 'enabled' },
-    activePermissionProfile: { id: ':workspace', extends: null },
-    reasoningEffort: null,
-    multiAgentMode: 'explicitRequestOnly'
+    }
   });
-  return {
-    adapter,
-    source,
-    target,
-    driverCalls,
-    presetSets,
-    get sourceDisposed() { return sourceDisposed; }
-  };
+  return { adapter, source, target, driverCalls, hostCalls, adoptions };
 }
 
-test('thread/fork uses DSH seed prefix and inherits DSH permission preset', async () => {
+test('thread/fork translates the Codex turn anchor and delegates creation to DSH Host', async () => {
   const fx = adapterFixture();
   const response = await fx.adapter.threadFork({
     threadId: fx.source.id,
     lastTurnId: 'dsh-turn-1',
     excludeTurns: true
   });
-  const forkCall = fx.driverCalls.find(([name]) => name === 'fork');
-  assert.ok(forkCall);
-  assert.deepEqual(forkCall[1].seed.map((event) => event.seq), [1, 2]);
-  assert.match(forkCall[1].sessionId, /^[0-9a-f-]{36}$/i);
-  assert.deepEqual(fx.presetSets, ['workspace-write']);
+
+  assert.deepEqual(fx.hostCalls[0], [
+    'forkSession',
+    { sessionId: fx.source.id, atSeq: 2 }
+  ]);
+  assert.equal(fx.adoptions.length, 1);
+  assert.equal(fx.adoptions[0].agent, fx.target);
   assert.equal(response.result.thread.id, fx.target.id);
   assert.deepEqual(response.result.thread.turns, []);
   assert.equal(typeof response.afterResponse, 'function');
+
+  await fx.adoptions[0].options.select({
+    provider: 'deepseek',
+    model: 'reasoner',
+    reasoningEffort: 'high'
+  });
+  assert.deepEqual(fx.hostCalls[1], [
+    'selectModel',
+    {
+      sessionId: fx.target.id,
+      provider: 'deepseek',
+      model: 'reasoner',
+      reasoningEffort: 'high'
+    }
+  ]);
 });
 
-test('cold thread/fork temporarily resumes official DSH source and releases it', async () => {
+test('cold thread/fork reads DSH persistence without temporarily resuming or cloning source state', async () => {
   const fx = adapterFixture({ cold: true });
   await fx.adapter.threadFork({ threadId: fx.source.id });
-  assert.deepEqual(fx.driverCalls.map(([name]) => name), ['resume', 'fork']);
-  assert.equal(fx.sourceDisposed, 1);
+
+  assert.ok(fx.driverCalls.some((call) => call[0] === 'inspectSession' && call[1] === fx.source.id));
+  assert.equal(fx.driverCalls.some((call) => call[0] === 'resume'), false);
+  assert.deepEqual(fx.hostCalls[0], [
+    'forkSession',
+    { sessionId: fx.source.id, atSeq: undefined }
+  ]);
 });
 
 test('thread/fork rejects Codex-only fork state DSH cannot faithfully own', async () => {
