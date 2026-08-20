@@ -105,10 +105,13 @@ const packageJson = {
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
 // Every relative import in the release closure must resolve inside the staged
-// package. This prevents a source-tree-only helper from leaking into 1.0.
+// package. Cover static `from`, side-effect `import`, and dynamic `import()` so
+// a source-tree-only helper cannot hide behind a lazy code path and leak into
+// 1.0 packaging.
+const localImportPattern = /(?:from\s+|import\s*(?:\(\s*)?)["'](\.{1,2}\/[^"']+)["']/g;
 for (const file of walkJs(stage)) {
   const source = fs.readFileSync(file, 'utf8');
-  for (const match of source.matchAll(/(?:from\s+|import\s*)['\"](\.{1,2}\/[^'\"]+)['\"]/g)) {
+  for (const match of source.matchAll(localImportPattern)) {
     const target = resolveLocalImport(path.dirname(file), match[1]);
     if (!target) throw new Error(`Release package has unresolved local import ${match[1]} from ${path.relative(stage, file)}`);
   }
