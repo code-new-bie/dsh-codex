@@ -20,14 +20,14 @@ No item becomes green because code for the check exists. A release candidate is 
 | Local production transport | no production TCP listener; pinned TUI rejects TCP WebSocket endpoint | pass |
 | Cross-platform local IPC data plane | `dshx-ipc-bridge --check` performs real private UDS + WebSocket-framing ping/pong | pass on Linux/Windows/macOS |
 | Visible slash-command contract | `scripts/verify-slash-contract.mjs` classifies every pinned Codex command and asserts DSH-backed methods for every runtime-owned command left visible in DSHX | pass |
-| Real pinned TUI / Linux | PTY smoke drives pinned TUI through local IPC, resizes the terminal, and roundtrips a CJK prompt | pass |
+| Real pinned TUI / Linux + macOS | PTY smoke drives pinned TUI through local IPC, resizes the terminal, and roundtrips a CJK prompt | pass on both Unix release platforms |
 | Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology, resizes the terminal, and roundtrips a Chinese prompt | pass |
-| Automated CJK/resize sanity | Linux PTY + Windows ConPTY verify UTF-8 input/echo survives a live resize without process/session loss | pass |
+| Automated CJK/resize sanity | Linux/macOS PTY + Windows ConPTY verify UTF-8 input/echo survives a live resize without process/session loss | pass |
 | Packaging | platform tarball + static local-import closure check + publishable shrinkwrap derived from the frozen source graph | pass |
 | Clean installation | install generated tarball then `dshx --version` + `dshx doctor` | pass on every release platform |
 | Release provenance | platform sidecar records Codex pin, DSH pin and SHA-256 of the frozen source `package-lock.json` | present and consistent across artifacts |
 | Release artifacts | Linux x64, Windows x64, macOS arm64, macOS x64 | all built |
-| Integrity | release `SHA256SUMS` | published |
+| Integrity | release `SHA256SUMS` covers tarballs and provenance sidecars | published |
 | Codex thin-fork invariants | patch application/build plus CI source assertions | pass |
 
 ## Manual UX acceptance gate
@@ -62,13 +62,13 @@ Any difference is either fixed, documented as a deliberate product difference in
 ## Promotion procedure
 
 1. Freeze the dependency graph in `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`; Codex/DSH pins must not change during validation.
-2. Run the full CI workflow and the dedicated Windows ConPTY workflow for that exact commit.
-3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass.
+2. Run the full CI workflow plus the dedicated macOS PTY and Windows ConPTY workflows for that exact commit.
+3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass. The RC tag must point at the current `release/1.0-rc` head.
 4. Confirm each release sidecar identifies the same frozen source-lock SHA-256 and expected Codex/DSH pins.
 5. Run `scripts/windows-rc-acceptance.ps1` against the generated Windows release artifact and its published SHA-256, then use the printed installed launcher for the manual Windows Terminal/CJK/IME side-by-side acceptance run.
 6. Resolve every failed gate without weakening a DSH ownership or security boundary.
 7. Re-run affected automated and manual gates after fixes.
-8. Promote only a commit/tag for which all required evidence is green.
+8. Merge PR #11 only after all RC gates are green; stable `v1.0.0` must point at the current `main` head and the release ledger issues #12–#15 must be closed.
 
 ## Current integration note
 
