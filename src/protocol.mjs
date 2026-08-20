@@ -48,7 +48,9 @@ function modelRecord() {
 
 function emptyThread(cwd) {
   const timestamp = nowSeconds();
-  const threadId = id('thread');
+  // Codex treats thread IDs as UUIDs and validates them before opening a remote thread.
+  // Keep the deterministic protocol stub aligned with that public app-server contract.
+  const threadId = crypto.randomUUID();
   return {
     id: threadId,
     sessionId: threadId,
