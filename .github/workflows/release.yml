@@ -165,11 +165,45 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      - name: Verify cross-platform artifact provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          import sys
+
+          files = sorted(glob.glob('artifacts/dshx-*.tgz.json'))
+          if len(files) != 4:
+              raise SystemExit(f'expected 4 platform provenance sidecars, found {len(files)}: {files}')
+          records = []
+          for filename in files:
+              with open(filename, encoding='utf-8') as handle:
+                  records.append((filename, json.load(handle)))
+          expected_version = os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          keys = ('version', 'dshVersion', 'codexCommit', 'dshCommit', 'transport', 'dependencyGraph', 'sourceLockSha256')
+          baseline = {key: records[0][1].get(key) for key in keys}
+          if baseline['version'] != expected_version:
+              raise SystemExit(f"artifact version mismatch: expected {expected_version}, got {baseline['version']}")
+          if baseline['dependencyGraph'] != 'source-package-lock':
+              raise SystemExit(f"unexpected dependency graph provenance: {baseline['dependencyGraph']}")
+          lock_hash = baseline['sourceLockSha256']
+          if not isinstance(lock_hash, str) or len(lock_hash) != 64 or any(ch not in '0123456789abcdef' for ch in lock_hash):
+              raise SystemExit(f'invalid source lock SHA-256: {lock_hash!r}')
+          for filename, record in records[1:]:
+              current = {key: record.get(key) for key in keys}
+              if current != baseline:
+                  raise SystemExit(f'cross-platform provenance mismatch in {filename}: {current} != {baseline}')
+          print(json.dumps(baseline, sort_keys=True))
+          PY
       - name: Create checksums
         shell: bash
         run: |
+          set -euo pipefail
           cd artifacts
-          sha256sum dshx-*.tgz > SHA256SUMS
+          sha256sum dshx-*.tgz dshx-*.tgz.json > SHA256SUMS
           cat SHA256SUMS
       - name: Create immutable GitHub release
         env:
