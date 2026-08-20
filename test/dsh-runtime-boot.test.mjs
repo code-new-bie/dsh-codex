@@ -99,3 +99,22 @@ test('DSHX surface patches cannot insert a second Agent, Session, tool or provid
     assert.equal(patch.disabled, true);
   }
 });
+
+test('presentation lifetime delegates disposal to the official DSH root Fiber', async () => {
+  let disposals = 0;
+  const ctx = {
+    fiber: {
+      async dispose() {
+        disposals += 1;
+      }
+    }
+  };
+
+  const decorated = runtimeInternals.attachPresentationLifetime(ctx);
+  assert.equal(decorated, ctx);
+  assert.equal(typeof ctx.dispose, 'function');
+  assert.equal(Object.prototype.propertyIsEnumerable.call(ctx, 'dispose'), false);
+
+  await ctx.dispose();
+  assert.equal(disposals, 1);
+});
