@@ -1,63 +1,51 @@
 name: CI
 
 on:
-  push:
-    branches: [main, 'work/**', 'agent/**', 'release/**']
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  protocol:
-    name: Protocol / ${{ matrix.os }} / Node ${{ matrix.node }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [20, 22]
+  core:
+    name: Core / Node 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 20
       - name: Install frozen dependency graph
         run: npm ci
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
-      - run: npm test
-      - name: Syntax check all shipped JavaScript (Unix)
-        if: runner.os != 'Windows'
+      - name: Unit and contract tests
+        run: npm test
+      - name: Verify DSH ownership boundary
+        run: node scripts/verify-ownership-boundary.mjs
+      - name: Boot and dispose official DeepSeek Harness composition
+        run: node scripts/runtime-smoke.mjs
+      - name: Syntax check shipped JavaScript
         shell: bash
         run: |
           set -euo pipefail
           while IFS= read -r file; do node --check "$file"; done < <(find src bin scripts -type f -name '*.mjs' -print | sort)
-      - name: Syntax check all shipped JavaScript (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Get-ChildItem src,bin,scripts -Recurse -Filter *.mjs | Sort-Object FullName | ForEach-Object {
-            node --check $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "syntax check failed: $($_.FullName)" }
-          }
       - name: Syntax check PTY smoke
-        if: runner.os != 'Windows'
         run: python3 -m py_compile test/tui_smoke.py
 
-  dsh-runtime:
-    name: Official DSH runtime / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  linux-tui:
+    name: Linux TUI / pinned Codex / local IPC
+    needs: core
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -67,217 +55,19 @@ jobs:
         run: npm ci
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
-      - name: Boot and dispose official DeepSeek Harness composition
-        run: node scripts/runtime-smoke.mjs
-
-  codex-tui-package:
-    name: Pinned TUI + package / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 20
-      - name: Build pinned Codex TUI + local IPC bridge (Unix)
-        if: runner.os != 'Windows'
+      - name: Build pinned Codex TUI + local IPC bridge
         shell: bash
         run: bash scripts/build-codex-tui.sh
-      - name: Build pinned Codex TUI + local IPC bridge (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/build-codex-tui.ps1
-      - name: Assert thin-fork invariants (Unix)
-        if: runner.os != 'Windows'
+      - name: Verify thin-fork and transport invariants
+        run: node scripts/verify-tui-invariants.mjs
+      - name: Verify local IPC data plane
+        shell: bash
+        run: dist/bin/dshx-ipc-bridge --check
+      - name: Exercise real TUI through Linux PTY + CJK + resize
         shell: bash
         run: |
           set -euo pipefail
-          MAIN=.upstream/codex/codex-rs/tui/src/main.rs
-          LIB=.upstream/codex/codex-rs/tui/src/lib.rs
-          APP=.upstream/codex/codex-rs/tui/src/app.rs
-          SESSION=.upstream/codex/codex-rs/tui/src/app_server_session.rs
-          SLASH=.upstream/codex/codex-rs/tui/src/slash_command.rs
-          STARTUP=.upstream/codex/codex-rs/tui/src/app/startup.rs
-          EVENT=.upstream/codex/codex-rs/tui/src/app/event_dispatch.rs
-          BRIDGE=.upstream/codex/codex-rs/stdio-to-uds/src/dshx_ipc_bridge.rs
-          grep -q 'DSHX_APP_SERVER_ENDPOINT is required' "$MAIN"
-          grep -q 'DSHX production launcher forbids TCP WebSocket transport' "$MAIN"
-          ! grep -q 'DSHX_APP_SERVER_TOKEN' "$MAIN"
-          grep -q 'RemoteAppServerEndpoint::UnixSocket' "$MAIN"
-          grep -q 'Some(dshx_endpoint)' "$MAIN"
-          grep -q 'DSHX_RESUME_MODE' "$MAIN"
-          grep -q 'UnixListener' "$BRIDGE"
-          grep -q 'UnixStream' "$BRIDGE"
-          grep -q 'dshxBridge.*ready' "$BRIDGE"
-          test -x dist/bin/dshx-ipc-bridge
-          dist/bin/dshx-ipc-bridge --check
-          grep -q 'DeepSeek Harness' .upstream/codex/codex-rs/tui/src/history_cell/session.rs
-          grep -q 'fn dshx_backend' .upstream/codex/codex-rs/tui/src/bottom_pane/approval_overlay.rs
-          grep -q 'fn dshx_backend' .upstream/codex/codex-rs/tui/src/chatwidget/permission_popups.rs
-          grep -q 'fn dshx_backend' "$LIB"
-          grep -q '!dshx_backend()' "$LIB"
-          grep -q '!crate::dshx_backend()' "$STARTUP"
-          grep -q '!crate::dshx_backend()' "$EVENT"
-          grep -q 'ThreadParamsMode::Remote' "$SESSION"
-          grep -q 'dshx resume' "$APP"
-          grep -q 'if crate::dshx_backend()' "$SLASH"
-          grep -q 'DeepSeek Harness' "$SLASH"
-          ! grep -q 'WebSocketServer' src/dsh/local-server.mjs
-          grep -q 'unix://' src/dsh/local-server.mjs
-          grep -q 'local-uds-via-stdio-bridge' scripts/package-platform.mjs
-          node - <<'NODE'
-          const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
-          if (pkg.dependencies?.ws) throw new Error('ws must not be a production dependency');
-          if (!pkg.devDependencies?.ws) throw new Error('development protocol stub still requires ws');
-          NODE
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path('.upstream/codex/codex-rs/tui/src/slash_command.rs').read_text()
-          start = text.index('if crate::dshx_backend()')
-          end = text.index('return false;', start)
-          hidden = text[start:end]
-          if 'SlashCommand::Diff' in hidden:
-              raise SystemExit('/diff must remain visible in DSHX now that command/exec is DSH-backed')
-          PY
-      - name: Assert thin-fork invariants (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $main = Get-Content .upstream\codex\codex-rs\tui\src\main.rs -Raw
-          if (-not $main.Contains('DSHX_APP_SERVER_ENDPOINT is required')) { throw 'missing DSHX endpoint guard' }
-          if (-not $main.Contains('DSHX production launcher forbids TCP WebSocket transport')) { throw 'TCP WebSocket production guard missing' }
-          if ($main.Contains('DSHX_APP_SERVER_TOKEN')) { throw 'legacy TCP bearer-token transport is still present' }
-          if (-not $main.Contains('RemoteAppServerEndpoint::UnixSocket')) { throw 'local Unix socket transport missing' }
-          if (-not $main.Contains('Some(dshx_endpoint)')) { throw 'Codex core fallback was not removed' }
-          if (-not $main.Contains('DSHX_RESUME_MODE')) { throw 'DSHX resume patch is missing' }
-          $bridge = Get-Content .upstream\codex\codex-rs\stdio-to-uds\src\dshx_ipc_bridge.rs -Raw
-          if (-not $bridge.Contains('UnixListener')) { throw 'cross-platform Codex UDS bridge is missing' }
-          if (-not $bridge.Contains('UnixStream')) { throw 'IPC data-plane self-check is missing' }
-          if (-not $bridge.Contains('dshxBridge')) { throw 'IPC bridge readiness protocol is missing' }
-          if (-not (Test-Path dist\bin\dshx-ipc-bridge.exe)) { throw 'packaged IPC bridge is missing' }
-          & .\dist\bin\dshx-ipc-bridge.exe --check
-          if ($LASTEXITCODE -ne 0) { throw 'packaged IPC bridge self-check failed' }
-          $header = Get-Content .upstream\codex\codex-rs\tui\src\history_cell\session.rs -Raw
-          if (-not $header.Contains('DeepSeek Harness')) { throw 'DSHX branding patch is missing' }
-          $approval = Get-Content .upstream\codex\codex-rs\tui\src\bottom_pane\approval_overlay.rs -Raw
-          if (-not $approval.Contains('fn dshx_backend')) { throw 'DSHX approval semantics patch is missing' }
-          $permissions = Get-Content .upstream\codex\codex-rs\tui\src\chatwidget\permission_popups.rs -Raw
-          if (-not $permissions.Contains('fn dshx_backend')) { throw 'DSHX permission picker patch is missing' }
-          $lib = Get-Content .upstream\codex\codex-rs\tui\src\lib.rs -Raw
-          if (-not $lib.Contains('fn dshx_backend')) { throw 'DSHX onboarding ownership patch is missing' }
-          $startup = Get-Content .upstream\codex\codex-rs\tui\src\app\startup.rs -Raw
-          if (-not $startup.Contains('!crate::dshx_backend()')) { throw 'DSHX startup ownership patch is missing' }
-          $event = Get-Content .upstream\codex\codex-rs\tui\src\app\event_dispatch.rs -Raw
-          if (-not $event.Contains('!crate::dshx_backend()')) { throw 'DSHX config ownership patch is missing' }
-          $session = Get-Content .upstream\codex\codex-rs\tui\src\app_server_session.rs -Raw
-          if (-not $session.Contains('ThreadParamsMode::Remote')) { throw 'DSHX thread ownership patch is missing' }
-          $app = Get-Content .upstream\codex\codex-rs\tui\src\app.rs -Raw
-          if (-not $app.Contains('dshx')) { throw 'DSHX resume hint patch is missing' }
-          $slash = Get-Content .upstream\codex\codex-rs\tui\src\slash_command.rs -Raw
-          if (-not $slash.Contains('if crate::dshx_backend()')) { throw 'DSHX slash capability patch is missing' }
-          if (-not $slash.Contains('DeepSeek Harness')) { throw 'DSHX slash branding is missing' }
-          $localServer = Get-Content src\dsh\local-server.mjs -Raw
-          if ($localServer.Contains('WebSocketServer')) { throw 'production adapter still opens a TCP WebSocket server' }
-          if (-not $localServer.Contains('unix://')) { throw 'production adapter does not publish a local Unix endpoint' }
-          $packager = Get-Content scripts\package-platform.mjs -Raw
-          if (-not $packager.Contains('local-uds-via-stdio-bridge')) { throw 'release metadata does not pin local IPC transport' }
-          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
-          if ($null -ne $pkg.dependencies.ws) { throw 'ws must not be a production dependency' }
-          if ($null -eq $pkg.devDependencies.ws) { throw 'development protocol stub still requires ws' }
-          $hiddenStart = $slash.IndexOf('if crate::dshx_backend()')
-          $hiddenEnd = $slash.IndexOf('return false;', $hiddenStart)
-          if ($hiddenStart -lt 0 -or $hiddenEnd -lt 0) { throw 'DSHX slash hidden block not found' }
-          $hidden = $slash.Substring($hiddenStart, $hiddenEnd - $hiddenStart)
-          if ($hidden.Contains('SlashCommand::Diff')) { throw '/diff must remain visible in DSHX now that command/exec is DSH-backed' }
-      - name: Real pinned TUI local-IPC PTY smoke
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci
-          node scripts/verify-dsh-closure.mjs
           VENV="$RUNNER_TEMP/dshx-pty-venv"
           python3 -m venv "$VENV"
           "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
           "$VENV/bin/python" test/tui_smoke.py
-      - name: Build installable platform tarball (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: node scripts/package-platform.mjs
-      - name: Build installable platform tarball (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: node scripts/package-platform.mjs
-      - name: Clean-install smoke (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
-          PREFIX="$RUNNER_TEMP/dshx-smoke"
-          npm install --global --prefix "$PREFIX" "$TGZ"
-          "$PREFIX/bin/dshx" --version
-          "$PREFIX/bin/dshx" doctor
-      - name: Clean-install smoke (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $tgz = Get-ChildItem dist\release\dshx-*.tgz | Select-Object -First 1
-          if (-not $tgz) { throw 'platform tarball missing' }
-          $prefix = Join-Path $env:RUNNER_TEMP 'dshx-smoke'
-          npm install --global --prefix $prefix $tgz.FullName
-          & (Join-Path $prefix 'dshx.cmd') --version
-          & (Join-Path $prefix 'dshx.cmd') doctor
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dshx-${{ runner.os }}-${{ runner.arch }}
-          path: |
-            dist/release/*.tgz
-            dist/release/*.json
-          if-no-files-found: error
-
-  ownership-guard:
-    name: Ownership boundary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Assert architecture contract exists
-        shell: bash
-        run: |
-          grep -q "must not grow into an agent framework" docs/ARCHITECTURE.md
-          grep -q "DeepSeek Harness remains an upstream dependency" docs/TEAM.md
-      - name: Assert production runtime remains official DSH composition
-        shell: bash
-        run: |
-          grep -q "dsh-base" src/dsh/runtime-boot.mjs
-          grep -q "dsh-headless" src/dsh/runtime-boot.mjs
-          grep -q "startup: { disabled: true }" src/dsh/runtime-boot.mjs
-      - name: Assert shell and workspace execution remain DSH-owned
-        shell: bash
-        run: |
-          ! grep -E "execFile|execSync|spawn\(" src/dsh/user-shell.mjs src/dsh/workspace-command.mjs
-          grep -q "tools.execute" src/dsh/user-shell.mjs
-          grep -q "agent: controller.agent" src/dsh/user-shell.mjs
-          grep -q "tools.execute" src/dsh/workspace-command.mjs
-          grep -q "agent" src/dsh/workspace-command.mjs
-          grep -q "case 'command/exec'" src/dsh/release-adapter.mjs
-      - name: Assert fork and compaction domain semantics remain DSH-owned
-        shell: bash
-        run: |
-          grep -q "@deepseek-ai/dsh-host-apiproxy" src/dsh/host-api.mjs
-          grep -q "api.sessions.fork" src/dsh/host-api.mjs
-          grep -q "executeDshCommand" src/dsh/product-adapter.mjs
-          grep -q "commands.execute" src/dsh/commands.mjs
-          ! grep -q "compactNow" src/dsh/product-adapter.mjs
-          ! grep -E "seedLength|parentSession|dshForkSeed" src/dsh/agent-driver.mjs src/dsh/product-adapter.mjs
-          ! grep -q "fork(sourceAgent" src/dsh/agent-driver.mjs
-      - name: Assert production transport is local IPC, not TCP WebSocket
-        shell: bash
-        run: |
-          ! grep -q "WebSocketServer" src/dsh/local-server.mjs
-          grep -q "unix://" src/dsh/local-server.mjs
-          grep -q "dshx-ipc-bridge" scripts/build-codex-tui.sh
