@@ -23,15 +23,27 @@ const REQUIRED_SERVICES = [
   'planMode'
 ];
 
-let ctx;
-const timer = setTimeout(() => {
-  process.stderr.write('dshx runtime smoke timed out while booting official DeepSeek Harness\n');
-  process.exit(124);
-}, 30_000);
-timer.unref?.();
+function withTimeout(promise, timeoutMs, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
 
+let ctx;
+let primaryError;
 try {
-  ctx = await bootDshxRuntime({ cwd: process.cwd() });
+  process.stdout.write('booting official DSH composition with production patch watchers enabled\n');
+  ctx = await withTimeout(
+    bootDshxRuntime({ cwd: process.cwd(), watch: true }),
+    20_000,
+    'official DSH composition boot'
+  );
+  process.stdout.write('official DSH composition boot completed\n');
+
   const missing = REQUIRED_SERVICES.filter((name) => ctx.get(name) == null);
   if (missing.length > 0) {
     throw new Error(`official DSH composition is missing required presentation services: ${missing.join(', ')}`);
@@ -41,7 +53,19 @@ try {
   // DSHX product dependency. Command discovery is likewise Agent-scoped in
   // DSH rc.8, so do not invent a fake Agent merely to inspect /compact here.
   process.stdout.write(`official DSH runtime booted: ${REQUIRED_SERVICES.join(', ')}\n`);
+} catch (error) {
+  primaryError = error;
 } finally {
-  clearTimeout(timer);
-  await ctx?.dispose?.();
+  if (ctx) {
+    process.stdout.write('disposing official DSH composition\n');
+    try {
+      await withTimeout(Promise.resolve(ctx.dispose?.()), 10_000, 'official DSH composition disposal');
+      process.stdout.write('official DSH composition disposed\n');
+    } catch (disposeError) {
+      if (!primaryError) primaryError = disposeError;
+      else process.stderr.write(`secondary DSH disposal failure: ${disposeError instanceof Error ? disposeError.stack : disposeError}\n`);
+    }
+  }
 }
+
+if (primaryError) throw primaryError;
