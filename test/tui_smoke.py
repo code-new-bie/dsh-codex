@@ -8,10 +8,15 @@ import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPT = "你好，DSHX PTY resize"
+trace_fd, trace_name = tempfile.mkstemp(prefix="dshx-protocol-trace-", suffix=".jsonl")
+os.close(trace_fd)
+trace_path = pathlib.Path(trace_name)
+server_env = os.environ.copy()
+server_env["DSHX_STUB_TRACE_FILE"] = str(trace_path)
 server = subprocess.Popen(
     ["node", "bin/dshx-stub-local.mjs"],
     cwd=ROOT,
-    env=os.environ.copy(),
+    env=server_env,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     text=True,
@@ -54,7 +59,12 @@ try:
             transcript.append(child.before + child.after)
         except Exception:
             transcript.append(child.before or "")
-            raise AssertionError("Pinned DSHX TUI local-IPC/CJK/resize smoke failed. Transcript:\n" + "".join(transcript))
+            trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
+            raise AssertionError(
+                "Pinned DSHX TUI local-IPC/CJK/resize smoke failed.\n"
+                f"Protocol trace:\n{trace}\n"
+                "Transcript:\n" + "".join(transcript)
+            )
         finally:
             child.close(force=True)
 finally:
@@ -64,3 +74,4 @@ finally:
     except subprocess.TimeoutExpired:
         server.kill()
         server.wait(timeout=5)
+    trace_path.unlink(missing_ok=True)
