@@ -22,9 +22,19 @@ function forbidText(path, pattern, label = String(pattern)) {
 requireText('docs/ARCHITECTURE.md', 'must not grow into an agent framework');
 requireText('docs/TEAM.md', 'DeepSeek Harness remains an upstream dependency');
 
-requireText('src/dsh/runtime-boot.mjs', 'dsh-base');
-requireText('src/dsh/runtime-boot.mjs', 'dsh-headless');
-requireText('src/dsh/runtime-boot.mjs', 'startup: { disabled: true }');
+// Runtime composition must stay on the official DSH app-boot/profile plane.
+// Do not key this guard to historical bundle row ids such as `dsh-base`:
+// those are upstream implementation details, not the ownership boundary.
+requireText('src/dsh/runtime-boot.mjs', "from '@deepseek-ai/dsh-app-boot'");
+requireText('src/dsh/runtime-boot.mjs', "const DEFAULT_PROFILE = 'headless'");
+requireText('src/dsh/runtime-boot.mjs', 'loadProfile(');
+requireText('src/dsh/runtime-boot.mjs', 'composeEntries(');
+requireText('src/dsh/runtime-boot.mjs', "{ id: 'headless-startup', disabled: true }");
+requireText('src/dsh/runtime-boot.mjs', "{ id: 'headless-runner', disabled: true }");
+requireText('src/dsh/runtime-boot.mjs', 'const ctx = await boot(');
+requireText('src/dsh/runtime-boot.mjs', 'profile.layers.flatMap((layer) => layer.patches)');
+requireText('src/dsh/runtime-boot.mjs', 'profile.patches');
+requireText('src/dsh/runtime-boot.mjs', 'homePatches');
 
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');
