@@ -21,8 +21,11 @@ git -C "$DEST" clean -ffd >/dev/null
 
 for patch in "$ROOT"/upstream/patches/codex/*.patch; do
   [[ -e "$patch" ]] || continue
-  git -C "$DEST" apply --check "$patch"
-  git -C "$DEST" apply "$patch"
+  # The maintained thin-fork patches are intentionally hand-readable and may
+  # have stale hunk line counts after upstream rebases. Recount from the hunk
+  # bodies while still requiring every context line to match the pinned Codex.
+  git -C "$DEST" apply --recount --check "$patch"
+  git -C "$DEST" apply --recount "$patch"
 done
 
 printf '%s\n' "Materialized Codex $PIN at $DEST"
