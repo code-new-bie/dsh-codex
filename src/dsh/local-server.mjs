@@ -26,6 +26,15 @@ function parseError(error) {
   };
 }
 
+function isPathWithin(root, candidate, pathApi = path) {
+  const relative = pathApi.relative(pathApi.resolve(root), pathApi.resolve(candidate));
+  return relative === '' || (
+    relative !== '..' &&
+    !relative.startsWith(`..${pathApi.sep}`) &&
+    !pathApi.isAbsolute(relative)
+  );
+}
+
 function defaultSocketRoot({
   home,
   platform = process.platform,
@@ -38,8 +47,15 @@ function defaultSocketRoot({
   // Anchor the rendezvous below the current user's DSHX presentation home,
   // whose parent in turn lives below the user's profile by default. Keep the
   // Windows suffix deliberately short because sockaddr_un.sun_path is bounded.
-  const presentationHome = path.resolve(home || path.join(userHome, '.dshx', 'codex-tui'));
-  return path.join(presentationHome, 'i');
+  const pathApi = path.win32;
+  const userProfile = pathApi.resolve(userHome);
+  const presentationHome = pathApi.resolve(home || pathApi.join(userProfile, '.dshx', 'codex-tui'));
+  if (!isPathWithin(userProfile, presentationHome, pathApi)) {
+    throw new Error(
+      `DSHX_TUI_HOME must remain under the Windows user profile (${userProfile}) so local IPC inherits private user ACLs; got ${presentationHome}`
+    );
+  }
+  return pathApi.join(presentationHome, 'i');
 }
 
 function createSocketDirectory(root) {
@@ -300,6 +316,7 @@ export async function startDshxLocalServer({
 
 export const localServerInternals = {
   WINDOWS_UNIX_PATH_MAX,
+  isPathWithin,
   defaultSocketRoot,
   createSocketDirectory,
   assertSocketPathSupported,
