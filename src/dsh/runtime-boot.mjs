@@ -153,6 +153,27 @@ async function installProfileWatchers(ctx, options) {
   });
 }
 
+async function disposeOfficialContext(ctx) {
+  if (!ctx) return;
+  if (typeof ctx.fiber?.dispose !== 'function') {
+    throw new Error('dshx: official DSH Context has no root fiber disposal contract');
+  }
+  await ctx.fiber.dispose();
+}
+
+function attachPresentationLifetime(ctx) {
+  // Cordis Context intentionally owns teardown through its root Fiber rather
+  // than a Context.dispose() method. DSHX keeps its launcher/local-server
+  // lifetime API small by exposing a non-enumerable alias that delegates to
+  // that official root-fiber contract; no runtime service is replaced.
+  Object.defineProperty(ctx, 'dispose', {
+    configurable: true,
+    enumerable: false,
+    value: () => disposeOfficialContext(ctx)
+  });
+  return ctx;
+}
+
 /**
  * Boot the selected official Harness profile in-process and return its root Context.
  * DSHX owns only presentation lifetime. Project and DSH-home environment and
@@ -168,17 +189,32 @@ export async function bootDshxRuntime({
 } = {}) {
   const options = { profile, overlays, home };
   const composition = dshxRuntimeProfile(options);
-  const ctx = await boot(
-    NAME,
-    composition.rootConfig,
-    structuredClone(composition.patches),
-    (hostCtx) => {
-      hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment);
-    },
-    pathToFileURL(composition.installAnchor).href
-  );
-  if (watch) await installProfileWatchers(ctx, options);
-  return ctx;
+  let ctx;
+  try {
+    ctx = await boot(
+      NAME,
+      composition.rootConfig,
+      structuredClone(composition.patches),
+      (hostCtx) => {
+        hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment);
+      },
+      pathToFileURL(composition.installAnchor).href
+    );
+    attachPresentationLifetime(ctx);
+    if (watch) await installProfileWatchers(ctx, options);
+    return ctx;
+  } catch (error) {
+    if (ctx) {
+      try {
+        await disposeOfficialContext(ctx);
+      } catch (disposeError) {
+        if (error && typeof error === 'object') {
+          try { Object.defineProperty(error, 'dshxCleanupError', { value: disposeError }); } catch {}
+        }
+      }
+    }
+    throw error;
+  }
 }
 
 export const runtimeInternals = {
@@ -192,5 +228,7 @@ export const runtimeInternals = {
   selectedProfile,
   profileHome,
   homePatchPath,
-  installProfileWatchers
+  installProfileWatchers,
+  disposeOfficialContext,
+  attachPresentationLifetime
 };
