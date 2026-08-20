@@ -54,6 +54,7 @@ function copy(relative) {
 // stubs remain source-tree development fixtures and are deliberately excluded
 // from installable artifacts.
 copy('bin/dshx.mjs');
+copy('src/cli');
 copy('src/dsh');
 copy('src/protocol');
 copy('config');
@@ -91,6 +92,7 @@ const packageJson = {
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
     'bin/dshx.mjs',
+    'src/cli',
     'src/dsh',
     'src/protocol',
     'config',
