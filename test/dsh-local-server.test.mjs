@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -148,6 +148,104 @@ test('local production transport exposes only a unix endpoint and relays RPC ove
   }
   assert.equal(FakeAdapter.closes, 1);
   assert.equal(disposed, 1);
+});
+
+test('startup rollback disposes DSH, terminates the bridge, and removes rendezvous state when Adapter construction fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-adapter-startup-test-'));
+  const fake = fakeBridgeSpawner();
+  let disposed = 0;
+  class ThrowingAdapter {
+    constructor() {
+      throw new Error('synthetic Adapter constructor failure');
+    }
+  }
+  const runtime = { async dispose() { disposed += 1; } };
+  try {
+    await assert.rejects(startDshxLocalServer({
+      runtime,
+      Adapter: ThrowingAdapter,
+      bridgeCommand: 'fake-dshx-ipc-bridge',
+      spawnBridge: (...args) => fake.spawn(...args),
+      socketRoot: root
+    }), /synthetic Adapter constructor failure/);
+    assert.equal(disposed, 1);
+    assert.ok(fake.child().exitCode !== null || fake.child().signalCode !== null);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('startup rollback removes the rendezvous directory when official DSH boot fails before bridge spawn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-boot-startup-test-'));
+  let spawnCount = 0;
+  try {
+    await assert.rejects(startDshxLocalServer({
+      bootRuntime: async () => {
+        throw new Error('synthetic DSH boot failure');
+      },
+      spawnBridge: () => {
+        spawnCount += 1;
+        return new FakeChild();
+      },
+      socketRoot: root
+    }), /synthetic DSH boot failure/);
+    assert.equal(spawnCount, 0);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('startup rollback disposes an injected runtime when socket-root creation fails and preserves the filesystem error', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'dshx-ipc-root-failure-test-'));
+  const blockedRoot = join(parent, 'not-a-directory');
+  writeFileSync(blockedRoot, 'block mkdir');
+  let disposed = 0;
+  const runtime = { async dispose() { disposed += 1; } };
+  try {
+    await assert.rejects(startDshxLocalServer({
+      runtime,
+      socketRoot: blockedRoot
+    }), (error) => {
+      assert.ok(['EEXIST', 'ENOTDIR'].includes(error?.code), `unexpected error code: ${error?.code}`);
+      return true;
+    });
+    assert.equal(disposed, 1);
+    assert.equal(existsSync(blockedRoot), true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('startup rollback keeps the original failure when DSH disposal also fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-double-failure-test-'));
+  const fake = fakeBridgeSpawner();
+  const logs = [];
+  class ThrowingAdapter {
+    constructor() {
+      throw new Error('primary startup failure');
+    }
+  }
+  const runtime = {
+    async dispose() {
+      throw new Error('secondary dispose failure');
+    }
+  };
+  try {
+    await assert.rejects(startDshxLocalServer({
+      runtime,
+      Adapter: ThrowingAdapter,
+      bridgeCommand: 'fake-dshx-ipc-bridge',
+      spawnBridge: (...args) => fake.spawn(...args),
+      socketRoot: root,
+      log: (message) => logs.push(message)
+    }), /primary startup failure/);
+    assert.ok(logs.some((message) => message.includes('startup rollback: DSH dispose failed: secondary dispose failure')));
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('close removes the private rendezvous directory even when DSH disposal fails', async () => {
