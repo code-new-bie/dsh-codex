@@ -87,11 +87,6 @@ const packageJson = {
   engines: { node: '>=20' },
   bin: { dshx: './bin/dshx.mjs' },
   dependencies: rootPackage.dependencies,
-  // Keep the source manifest and publishable lock structurally aligned. npm
-  // does not install a package's devDependencies for consumers; keeping them
-  // here lets the published shrinkwrap be a version-adjusted copy of the
-  // trusted source lock instead of resolving a second dependency graph.
-  devDependencies: rootPackage.devDependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
     'bin/dshx.mjs',
@@ -119,8 +114,10 @@ for (const file of walkJs(stage)) {
 
 // npm-shrinkwrap.json is the publishable form of package-lock.json. Derive the
 // artifact lock from the trusted source lock so packaging cannot silently
-// resolve a different transitive graph. Only package identity/platform fields
-// differ between a source checkout and a platform release artifact.
+// resolve a different transitive graph. The source lock may contain dev-only
+// nodes for repository tests; the publishable root deliberately exposes only
+// production dependencies, so those nodes are not reachable from the shipped
+// package even though their resolved records remain frozen in the lockfile.
 const shrinkwrap = structuredClone(sourceLock);
 shrinkwrap.name = packageJson.name;
 shrinkwrap.version = packageJson.version;
@@ -133,8 +130,7 @@ shrinkwrapRoot.cpu = packageJson.cpu;
 shrinkwrapRoot.engines = packageJson.engines;
 shrinkwrapRoot.bin = packageJson.bin;
 shrinkwrapRoot.dependencies = packageJson.dependencies;
-if (packageJson.devDependencies) shrinkwrapRoot.devDependencies = packageJson.devDependencies;
-else delete shrinkwrapRoot.devDependencies;
+delete shrinkwrapRoot.devDependencies;
 const shrinkwrapPath = path.join(stage, 'npm-shrinkwrap.json');
 fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
 
