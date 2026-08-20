@@ -11,7 +11,6 @@ const REQUIRED_SERVICES = [
   'sessionQuery',
   'sessionProjections',
   'sessionTitle',
-  'workspaceRegistry',
   'attachments',
   'tools',
   'commands',
@@ -37,9 +36,10 @@ try {
   if (missing.length > 0) {
     throw new Error(`official DSH composition is missing required presentation services: ${missing.join(', ')}`);
   }
-  // Command discovery is Agent-scoped in DSH rc.8. Do not invent a fake Agent
-  // just to inspect /compact here: the product-level delegation test proves the
-  // command call shape, while this smoke proves the official shipped services compose.
+  // Workspace command probes are Agent-scoped and use the official `tools`
+  // service. `workspaceRegistry` was an older composition detail and is not a
+  // DSHX product dependency. Command discovery is likewise Agent-scoped in
+  // DSH rc.8, so do not invent a fake Agent merely to inspect /compact here.
   process.stdout.write(`official DSH runtime booted: ${REQUIRED_SERVICES.join(', ')}\n`);
 } finally {
   clearTimeout(timer);
