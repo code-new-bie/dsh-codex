@@ -83,7 +83,7 @@ test('Windows default local IPC root is anchored below DSHX user presentation ho
     temporaryDirectory: 'C:\\shared-temp',
     userHome: 'C:\\Users\\Alice'
   });
-  assert.equal(root, resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'ipc'));
+  assert.equal(root, resolve('C:\\Users\\Alice\\.dshx\\codex-tui', 'i'));
   assert.doesNotMatch(root.toLowerCase(), /shared-temp/);
 });
 
@@ -93,7 +93,24 @@ test('Windows fallback IPC root remains below the current user home when no pres
     temporaryDirectory: 'C:\\shared-temp',
     userHome: 'C:\\Users\\Alice'
   });
-  assert.equal(root, resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'ipc'));
+  assert.equal(root, resolve('C:\\Users\\Alice', '.dshx', 'codex-tui', 'i'));
+});
+
+test('Windows local IPC path guard measures UTF-8 bytes and reserves the terminating NUL', () => {
+  const max = localServerInternals.WINDOWS_UNIX_PATH_MAX;
+  assert.equal(max, 108);
+  assert.doesNotThrow(() => localServerInternals.assertSocketPathSupported(
+    `C:\\${'a'.repeat(104)}`,
+    { platform: 'win32' }
+  ));
+  assert.throws(() => localServerInternals.assertSocketPathSupported(
+    `C:\\${'a'.repeat(105)}`,
+    { platform: 'win32' }
+  ), /requires fewer than 108/);
+  assert.throws(() => localServerInternals.assertSocketPathSupported(
+    `C:\\${'你'.repeat(35)}`,
+    { platform: 'win32' }
+  ), /108 UTF-8 bytes/);
 });
 
 test('Unix default local IPC root stays in tmp; createSocketDirectory enforces an ephemeral subdirectory', () => {
@@ -101,7 +118,7 @@ test('Unix default local IPC root stays in tmp; createSocketDirectory enforces a
   try {
     assert.equal(localServerInternals.defaultSocketRoot({ platform: 'linux', temporaryDirectory: root }), root);
     const child = localServerInternals.createSocketDirectory(root);
-    assert.match(child, /^.*dshx-/);
+    assert.match(child, /^.*d-/);
     assert.notEqual(child, root);
   } finally {
     rmSync(root, { recursive: true, force: true });
