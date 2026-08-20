@@ -110,8 +110,11 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          python3 -m pip install --user pexpect
-          python3 test/tui_smoke.py
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/dshx-pty-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
+          "$VENV/bin/python" test/tui_smoke.py
       - name: Install test-only Windows ConPTY bridge
         if: runner.os == 'Windows'
         shell: pwsh
