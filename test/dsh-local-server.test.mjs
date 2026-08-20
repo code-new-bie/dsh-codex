@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { localServerInternals, startDshxLocalServer } from '../src/dsh/local-server.mjs';
@@ -131,6 +131,31 @@ test('local production transport exposes only a unix endpoint and relays RPC ove
   }
   assert.equal(FakeAdapter.closes, 1);
   assert.equal(disposed, 1);
+});
+
+test('close removes the private rendezvous directory even when DSH disposal fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshx-ipc-close-test-'));
+  const fake = fakeBridgeSpawner();
+  const runtime = {
+    async dispose() {
+      throw new Error('synthetic DSH dispose failure');
+    }
+  };
+  const server = await startDshxLocalServer({
+    runtime,
+    Adapter: FakeAdapter,
+    bridgeCommand: 'fake-dshx-ipc-bridge',
+    spawnBridge: (...args) => fake.spawn(...args),
+    socketRoot: root
+  });
+  const rendezvousDirectory = dirname(server.path);
+  assert.equal(existsSync(rendezvousDirectory), true);
+  try {
+    await assert.rejects(server.close(), /synthetic DSH dispose failure/);
+    assert.equal(existsSync(rendezvousDirectory), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('local production transport returns JSON-RPC parse errors through bridge stdio', async () => {
