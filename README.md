@@ -61,7 +61,7 @@ The candidate implementation includes:
 - an executable visible-slash-command contract so every runtime-owned command left visible is either DSH-backed or the build fails;
 - release artifacts for Linux x64, Windows x64, macOS arm64 and macOS x64;
 - clean-install `dshx doctor`, including a real local UDS + WebSocket-framing ping/pong data-plane self-check;
-- Linux real-TUI PTY smoke and Windows real-TUI ConPTY + Chinese-text smoke through the production local-IPC topology;
+- Linux/macOS real-TUI PTY smoke and Windows real-TUI ConPTY + Chinese-text smoke through the production local-IPC topology;
 - fail-closed ownership/security tests that keep DSH authoritative.
 
 A commit is not called 1.0-ready merely because these paths exist. The exact release candidate must pass the repository CI/release gates and the side-by-side Windows Terminal/CJK/IME acceptance pass described in `docs/RELEASE-READINESS.md` and `docs/UX-PARITY.md`.
@@ -122,7 +122,7 @@ dshx
 
 ## Release model
 
-Tags matching `v*` build platform-specific installable tarballs in GitHub Actions. The release workflow performs adapter/runtime tests from the frozen npm graph, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises the Linux PTY and Windows ConPTY gates where applicable, verifies cross-platform provenance, and publishes SHA-256 checksums for both tarballs and provenance sidecars. Release candidates containing `-` in the tag are published as prereleases.
+Tags matching `v*` build platform-specific installable tarballs in GitHub Actions. The release workflow performs adapter/runtime tests from the frozen npm graph, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises Linux/macOS PTY and Windows ConPTY real-TUI gates, verifies cross-platform provenance, and publishes SHA-256 checksums for both tarballs and provenance sidecars. Release candidates containing `-` in the tag are published as prereleases.
 
 The publishable `npm-shrinkwrap.json` inside each artifact is derived from the trusted source `package-lock.json`; packaging does not resolve a second dependency graph. Release sidecars record the source-lock SHA-256 plus the pinned Codex and DSH commits.
 
