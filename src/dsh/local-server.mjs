@@ -219,8 +219,13 @@ export async function startDshxLocalServer({
       if (bridge.stdin?.writable) bridge.stdin.end();
       await waitForExit(bridge);
       if (bridge.exitCode === null && bridge.signalCode === null) bridge.kill('SIGKILL');
-      await ctx.dispose?.();
-      fs.rmSync(socketDirectory, { recursive: true, force: true });
+      try {
+        await ctx.dispose?.();
+      } finally {
+        // The rendezvous directory is presentation transport state only. Its
+        // cleanup must not depend on successful DSH runtime disposal.
+        fs.rmSync(socketDirectory, { recursive: true, force: true });
+      }
     }
   };
 
