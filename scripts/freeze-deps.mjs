@@ -1,5 +1,8 @@
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { assertReleaseNodeVersion } from '../src/cli/runtime.mjs';
+
+const OFFICIAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -35,6 +38,19 @@ function npmInvocation(args) {
   return [process.execPath, [npmCli, ...args]];
 }
 
+function assertOfficialResolvedUrls(lock) {
+  for (const [location, record] of Object.entries(lock.packages ?? {})) {
+    const resolved = record?.resolved;
+    if (typeof resolved !== 'string' || !resolved.startsWith('http')) continue;
+    const url = new URL(resolved);
+    if (url.protocol !== 'https:' || url.hostname !== 'registry.npmjs.org') {
+      throw new Error(
+        `Frozen package-lock.json contains a non-official npm resolved URL at ${location || '<root>'}: ${resolved}`
+      );
+    }
+  }
+}
+
 assertReleaseNodeVersion();
 const [npmCommand, npmVersionArgs] = npmInvocation(['--version']);
 const npmVersion = capture(npmCommand, npmVersionArgs);
@@ -44,14 +60,19 @@ if (npmMajor !== 11) {
 }
 
 console.log(`Freezing DSHX dependencies with Node ${process.version} / npm ${npmVersion}`);
+console.log(`Using official npm registry ${OFFICIAL_NPM_REGISTRY} for release provenance`);
 const [installCommand, installArgs] = npmInvocation([
   'install',
   '--package-lock-only',
   '--ignore-scripts',
   '--no-audit',
   '--no-fund',
+  `--registry=${OFFICIAL_NPM_REGISTRY}`,
 ]);
 run(installCommand, installArgs);
+
+const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+assertOfficialResolvedUrls(lock);
 
 run(process.execPath, [
   'scripts/verify-dsh-closure.mjs',
