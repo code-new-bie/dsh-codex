@@ -4,17 +4,24 @@ This file defines the evidence required before a DSHX release candidate may be p
 
 ## Rule
 
-No item becomes green because code for the check exists. A release candidate is green only when the corresponding GitHub Actions job or documented manual acceptance run has passed for the exact candidate commit/tag.
+No item becomes green because code for the check exists. A release candidate is green only when the corresponding repository gate or CI job has passed for the exact candidate commit/tag and the result is recorded. GitHub Actions is an automation surface, not the authority for release correctness: runner-independent repository scripts are preferred wherever a check does not intrinsically require a hosted platform.
+
+## Automation tiers
+
+- **PR / main CI:** two Ubuntu jobs only. `Core / Node 20` runs first; `Linux TUI / pinned Codex / local IPC` runs only after Core passes.
+- **RC platform gate:** only `release/**` pushes (or manual dispatch) run real Windows ConPTY and macOS PTY/CJK/resize validation.
+- **Release tag:** `v*` runs the full platform packaging, clean-install, provenance, checksum and publication matrix.
+- **Dependency freeze:** never writes a branch from CI. Run `npm run freeze:deps` in a trusted Node 20 environment with npm-registry access, review the generated `package-lock.json`, then commit it. CI consumes it with `npm ci`.
 
 ## Automated gates
 
 | Gate | Evidence implemented in repository | Required result for 1.0 |
 |---|---|---|
 | Zero-argument launch | `bin/dshx.mjs`, clean-install smoke | pass on supported release artifacts |
-| Official DSH composition | `scripts/runtime-smoke.mjs` on Linux/Windows/macOS | pass |
-| Frozen source dependency graph | checked-in `package-lock.json`; trusted main-branch RC freeze workflow resolves it with install scripts disabled | lock present and no manifest drift |
+| Official DSH composition | `scripts/runtime-smoke.mjs` | pass on exact candidate |
+| Frozen source dependency graph | checked-in `package-lock.json`; `npm run freeze:deps` resolves it with install scripts disabled | lock present, reviewed and no manifest drift |
 | Exact DSH dependency closure | `scripts/verify-dsh-closure.mjs`, source lock and release shrinkwrap | pass |
-| DSH ownership boundary | adapter/unit tests + CI ownership assertions | pass |
+| DSH ownership boundary | adapter/unit tests + `scripts/verify-ownership-boundary.mjs` | pass |
 | Approval/permission fail-closed | approval/permission/subagent authority tests | pass |
 | Session resume/durability projection | DSH `agents.resume`, persistence projection and resume tests; persisted model/header wins over machine default | pass |
 | Local production transport | no production TCP listener; pinned TUI rejects TCP WebSocket endpoint | pass |
@@ -29,7 +36,7 @@ No item becomes green because code for the check exists. A release candidate is 
 | Release provenance | platform sidecar records Codex pin, DSH pin and SHA-256 of the frozen source `package-lock.json` | present and consistent across artifacts |
 | Release artifacts | Linux x64, Windows x64, macOS arm64, macOS x64 | all built |
 | Integrity | release `SHA256SUMS` covers tarballs and provenance sidecars | published |
-| Codex thin-fork invariants | patch application/build plus CI source assertions | pass |
+| Codex thin-fork invariants | patch application/build + `scripts/verify-tui-invariants.mjs` | pass |
 
 ## Manual UX acceptance gate
 
@@ -62,8 +69,8 @@ Any difference is either fixed, documented as a deliberate product difference in
 
 ## Promotion procedure
 
-1. Freeze the dependency graph in `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`; Codex/DSH pins must not change during validation.
-2. Run the full CI workflow plus the dedicated macOS PTY and Windows ConPTY workflows for that exact commit.
+1. In a trusted Node 20 environment with npm-registry access, run `npm run freeze:deps`; review and commit the generated `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`. Codex/DSH pins must not change during validation.
+2. Require the exact candidate to pass the lean `CI` workflow (`Core` then `Linux TUI`) and the `RC Platform Gate` (Windows ConPTY + macOS PTY). Equivalent runner-independent repository gates may be used for diagnosis, but platform acceptance must execute on the named platform.
 3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass. The RC tag must point at the current `release/1.0-rc` head.
 4. Confirm each release sidecar identifies the same frozen source-lock SHA-256 and expected Codex/DSH pins.
 5. Run `scripts/windows-rc-acceptance.ps1` against the generated Windows release artifact and its published SHA-256, then use the printed installed launcher for the manual Windows Terminal/CJK/IME side-by-side acceptance run.
@@ -75,4 +82,4 @@ Any difference is either fixed, documented as a deliberate product difference in
 
 `release/1.0-rc` is the sole release-candidate integration branch. It is based on the production local-IPC implementation from `agent/production-ipc`; the alternative direct-stdio Codex-client experiment is intentionally excluded because it requires a much larger upstream TUI/client patch and would increase DSHX maintenance ownership.
 
-Older stacked draft PRs remain historical engineering workstreams only. They are not release evidence. The exact `release/1.0-rc` head and its eventual `v1.0.0-rc.N` tag are the only commits whose CI/manual evidence may be used to promote 1.0.
+Older stacked draft PRs remain historical engineering workstreams only. They are not release evidence. The exact `release/1.0-rc` head and its eventual `v1.0.0-rc.N` tag are the only commits whose automated/manual evidence may be used to promote 1.0.
