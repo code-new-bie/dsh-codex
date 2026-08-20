@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -11,7 +12,9 @@ const sourceLockPath = path.join(root, 'package-lock.json');
 if (!fs.existsSync(sourceLockPath)) {
   throw new Error('Missing frozen package-lock.json; freeze the RC dependency graph before packaging');
 }
-const sourceLock = JSON.parse(fs.readFileSync(sourceLockPath, 'utf8'));
+const sourceLockBytes = fs.readFileSync(sourceLockPath);
+const sourceLockSha256 = createHash('sha256').update(sourceLockBytes).digest('hex');
+const sourceLock = JSON.parse(sourceLockBytes.toString('utf8'));
 const sourceLockRoot = sourceLock.packages?.[''];
 if (!sourceLockRoot) throw new Error('Frozen package-lock.json has no root package record');
 
@@ -169,6 +172,7 @@ const metadata = {
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
   transport: 'local-uds-via-stdio-bridge',
   dependencyGraph: 'source-package-lock',
+  sourceLockSha256,
   tarball: path.basename(targetTarball)
 };
 fs.writeFileSync(`${targetTarball}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
