@@ -57,6 +57,7 @@ copy('bin/dshx.mjs');
 copy('src/dsh');
 copy('src/protocol');
 copy('config');
+copy('README.md');
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
 copy('upstream/DSH_COMMIT');
@@ -95,6 +96,7 @@ const packageJson = {
     'config',
     'dist/bin',
     'upstream',
+    'README.md',
     'LICENSE',
     'NOTICE',
     'npm-shrinkwrap.json'
