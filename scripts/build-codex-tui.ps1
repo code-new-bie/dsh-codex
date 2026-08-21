@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 & (Join-Path $Root 'scripts\materialize-codex.ps1')

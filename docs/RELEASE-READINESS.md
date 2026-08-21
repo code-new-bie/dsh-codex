@@ -11,7 +11,7 @@ The pinned DSH `0.1.0-rc.8` line requires Node `^22.19.0 || >=24.0.0`. DSHX 1.0 
 ## Automation tiers
 
 - **PR / main CI:** two Ubuntu jobs only. `Core / Node 24` runs first; `Linux TUI / pinned Codex / local IPC` runs only after Core passes.
-- **RC platform gate:** only `release/**` pushes (or manual dispatch) run real Windows ConPTY and macOS PTY/CJK/resize validation.
+- **RC platform gate:** `release/**` PR heads targeting `main` (or manual dispatch) run real Windows ConPTY and macOS PTY/CJK/resize validation with explicit exact-head checkout verification.
 - **Release tag:** `v*` runs the full platform packaging, clean-install, provenance, checksum and publication matrix.
 - **Dependency freeze:** never writes a branch from CI. Run `npm run freeze:deps` in a trusted Node 24 LTS / npm 11 environment with npm-registry access, review the generated `package-lock.json`, then commit it. CI consumes it with `npm ci`.
 

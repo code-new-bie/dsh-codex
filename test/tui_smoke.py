@@ -63,6 +63,11 @@ try:
             "TERM": "xterm-256color",
             "CODEX_HOME": codex_home,
             "DSHX_APP_SERVER_ENDPOINT": endpoint,
+            # pexpect provides a PTY transport, not a terminal emulator that can
+            # negotiate kitty keyboard enhancement modes. Use Codex's supported
+            # fallback so this gate measures TUI/local-IPC/CJK/resize behavior
+            # consistently on Linux and macOS rather than terminal emulation.
+            "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "1",
         })
         child = pexpect.spawn(
             str(binary),
@@ -79,10 +84,7 @@ try:
             wait_for_protocol_notification("thread/started")
             child.setwinsize(40, 100)
             child.send(PROMPT)
-            # Pinned Codex enables the kitty keyboard enhancement protocol (CSI-u).
-            # pexpect is a PTY transport, not a terminal emulator, so emulate the
-            # Enter key encoding a compliant terminal sends while that mode is active.
-            child.send("\x1b[13u")
+            child.send("\r")
             child.expect("DSHX protocol stub received:")
             transcript.append(child.before + child.after)
             child.expect(PROMPT)
