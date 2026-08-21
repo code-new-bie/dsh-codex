@@ -1,0 +1,233 @@
+diff --git a/codex-rs/app-server-client/src/lib.rs b/codex-rs/app-server-client/src/lib.rs
+--- a/codex-rs/app-server-client/src/lib.rs
++++ b/codex-rs/app-server-client/src/lib.rs
+@@ -27,39 +27,54 @@ use std::sync::Arc;
+ use std::time::Duration;
+ 
++#[cfg(feature = "embedded")]
+ pub use codex_app_server::app_server_control_socket_path;
+-pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
++/// Default bounded channel capacity used by both embedded and remote clients.
++///
++/// This mirrors the pinned app-server transport capacity without requiring the
++/// authoritative embedded app-server crate in DSHX's remote-only profile.
++pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = 128;
++#[cfg(feature = "embedded")]
+ pub use codex_app_server::in_process::InProcessServerEvent;
++#[cfg(feature = "embedded")]
+ use codex_app_server::in_process::InProcessStartArgs;
++#[cfg(feature = "embedded")]
+ use codex_app_server::in_process::LogDbLayer;
++#[cfg(feature = "embedded")]
+ pub use codex_app_server::in_process::StateDbHandle;
++#[cfg(feature = "embedded")]
+ use codex_app_server_protocol::ClientInfo;
+ use codex_app_server_protocol::ClientNotification;
+ use codex_app_server_protocol::ClientRequest;
++#[cfg(feature = "embedded")]
+ use codex_app_server_protocol::ConfigWarningNotification;
++#[cfg(feature = "embedded")]
+ use codex_app_server_protocol::InitializeCapabilities;
++#[cfg(feature = "embedded")]
+ use codex_app_server_protocol::InitializeParams;
+ use codex_app_server_protocol::JSONRPCErrorError;
+ use codex_app_server_protocol::RequestId;
+ use codex_app_server_protocol::Result as JsonRpcResult;
+ use codex_app_server_protocol::ServerNotification;
+ use codex_app_server_protocol::ServerRequest;
++#[cfg(feature = "embedded")]
+ use codex_arg0::Arg0DispatchPaths;
++#[cfg(feature = "embedded")]
+ use codex_config::CloudConfigBundleLoader;
++#[cfg(feature = "embedded")]
+ use codex_config::LoaderOverrides;
++#[cfg(feature = "embedded")]
+ use codex_config::NoopThreadConfigLoader;
++#[cfg(feature = "embedded")]
+ use codex_core::config::Config;
++#[cfg(feature = "embedded")]
+ pub use codex_core::otel_init::build_provider as build_otel_provider;
++#[cfg(feature = "embedded")]
+ pub use codex_exec_server::EnvironmentManager;
++#[cfg(feature = "embedded")]
+ pub use codex_exec_server::ExecServerRuntimePaths;
++#[cfg(feature = "embedded")]
+ use codex_feedback::CodexFeedback;
++#[cfg(feature = "embedded")]
+ use codex_protocol::protocol::SessionSource;
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ use serde::de::DeserializeOwned;
+@@ -67,6 +82,7 @@ use tokio::sync::mpsc;
+ use tokio::sync::oneshot;
+ use tokio::time::timeout;
++#[cfg(feature = "embedded")]
+ use toml::Value as TomlValue;
+ use tracing::warn;
+ 
+@@ -80,6 +96,7 @@ pub use crate::remote::RemoteAppServerEndpoint;
+ /// New TUI behavior should prefer the app-server protocol methods. This
+ /// module exists so clients can remove a direct `codex-core` dependency
+ /// while legacy startup/config paths are migrated to RPCs.
++#[cfg(feature = "embedded")]
+ pub mod legacy_core {
+     pub mod config {
+         pub use codex_core::config::*;
+@@ -91,6 +108,7 @@ pub mod legacy_core {
+ 
+ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+ // Covers the embedded drain, its analytics flush, and final task join.
++#[cfg(feature = "embedded")]
+ const IN_PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
+@@ -107,6 +125,7 @@ pub enum AppServerEvent {
+     Disconnected { message: String },
+ }
+ 
++#[cfg(feature = "embedded")]
+ impl From<InProcessServerEvent> for AppServerEvent {
+     fn from(value: InProcessServerEvent) -> Self {
+         match value {
+@@ -167,6 +186,7 @@ impl Error for TypedRequestError {
+     }
+ }
+ 
++#[cfg(feature = "embedded")]
+ #[derive(Clone)]
+ pub struct InProcessClientStartArgs {
+@@ -219,6 +239,7 @@ pub struct InProcessClientStartArgs {
+     pub channel_capacity: usize,
+ }
+ 
++#[cfg(feature = "embedded")]
+ impl InProcessClientStartArgs {
+@@ -264,6 +285,7 @@ impl InProcessClientStartArgs {
+ /// Each variant carries a oneshot sender so the caller can `await` the
+ /// result without holding a mutable reference to the client.
++#[cfg(feature = "embedded")]
+ enum ClientCommand {
+@@ -293,6 +315,7 @@ enum ClientCommand {
+ /// callers aligned with app-server behavior while still avoiding a process
+ /// boundary.
++#[cfg(feature = "embedded")]
+ pub struct InProcessAppServerClient {
+@@ -302,20 +325,25 @@ pub struct InProcessAppServerClient {
+ }
+ 
++#[cfg(feature = "embedded")]
+ #[derive(Clone)]
+ pub struct InProcessAppServerRequestHandle {
+     command_tx: mpsc::Sender<ClientCommand>,
+ }
+ 
+ #[derive(Clone)]
+ pub enum AppServerRequestHandle {
++    #[cfg(feature = "embedded")]
+     InProcess(InProcessAppServerRequestHandle),
+     Remote(crate::remote::RemoteAppServerRequestHandle),
+ }
+ 
+ pub enum AppServerClient {
++    #[cfg(feature = "embedded")]
+     InProcess(InProcessAppServerClient),
+     Remote(RemoteAppServerClient),
+ }
+ 
++#[cfg(feature = "embedded")]
+ impl InProcessAppServerClient {
+@@ -601,6 +629,7 @@ impl InProcessAppServerClient {
+     }
+ }
+ 
++#[cfg(feature = "embedded")]
+ impl InProcessAppServerRequestHandle {
+@@ -653,6 +682,7 @@ impl AppServerRequestHandle {
+     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(handle) => handle.request(request).await,
+             Self::Remote(handle) => handle.request(request).await,
+         }
+@@ -663,6 +693,7 @@ impl AppServerRequestHandle {
+         T: DeserializeOwned,
+     {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(handle) => handle.request_typed(request).await,
+             Self::Remote(handle) => handle.request_typed(request).await,
+         }
+@@ -672,6 +703,7 @@ impl AppServerClient {
+     pub fn codex_home(&self, local_codex_home: &AbsolutePathBuf) -> Option<AppServerPath> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(_) => Some(AppServerPath::from_app_server(
+                 local_codex_home.display().to_string(),
+             )),
+@@ -682,6 +714,7 @@ impl AppServerClient {
+ 
+     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.request(request).await,
+             Self::Remote(client) => client.request(request).await,
+         }
+@@ -693,6 +726,7 @@ impl AppServerClient {
+         T: DeserializeOwned,
+     {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.request_typed(request).await,
+             Self::Remote(client) => client.request_typed(request).await,
+         }
+@@ -701,6 +735,7 @@ impl AppServerClient {
+ 
+     pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.notify(notification).await,
+             Self::Remote(client) => client.notify(notification).await,
+         }
+@@ -713,6 +748,7 @@ impl AppServerClient {
+         result: JsonRpcResult,
+     ) -> IoResult<()> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.resolve_server_request(request_id, result).await,
+             Self::Remote(client) => client.resolve_server_request(request_id, result).await,
+         }
+@@ -725,6 +761,7 @@ impl AppServerClient {
+         error: JSONRPCErrorError,
+     ) -> IoResult<()> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.reject_server_request(request_id, error).await,
+             Self::Remote(client) => client.reject_server_request(request_id, error).await,
+         }
+@@ -733,6 +770,7 @@ impl AppServerClient {
+ 
+     pub async fn next_event(&mut self) -> Option<AppServerEvent> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.next_event().await.map(Into::into),
+             Self::Remote(client) => client.next_event().await,
+         }
+@@ -741,6 +779,7 @@ impl AppServerClient {
+ 
+     pub async fn shutdown(self) -> IoResult<()> {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => client.shutdown().await,
+             Self::Remote(client) => client.shutdown().await,
+         }
+@@ -749,12 +788,14 @@ impl AppServerClient {
+ 
+     pub fn request_handle(&self) -> AppServerRequestHandle {
+         match self {
++            #[cfg(feature = "embedded")]
+             Self::InProcess(client) => AppServerRequestHandle::InProcess(client.request_handle()),
+             Self::Remote(client) => AppServerRequestHandle::Remote(client.request_handle()),
+         }
+     }
+ }
+ 
+-#[cfg(test)]
++#[cfg(all(test, feature = "embedded"))]
+ mod tests {
