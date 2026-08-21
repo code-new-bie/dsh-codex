@@ -51,9 +51,6 @@ jobs:
         run: |
           & .\dist\bin\dshx-ipc-bridge.exe --check
           if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
-      - name: Install test-only ConPTY bridge
-        shell: pwsh
-        run: npm install --no-save --package-lock=false --include=optional --ignore-scripts=false node-pty@1.1.0
       - name: Exercise real TUI through Windows ConPTY + CJK text
         run: node test/tui_smoke_windows.mjs
 

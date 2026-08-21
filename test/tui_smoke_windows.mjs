@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import * as pty from 'node-pty';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const EXPECTED_NODE_PTY_VERSION = '1.2.0-beta.15';
 
 function stripTerminalControl(value) {
   return value
@@ -116,6 +117,13 @@ if (process.platform !== 'win32') {
   throw new Error('tui_smoke_windows.mjs must run on Windows/ConPTY');
 }
 
+const nodePtyPackage = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules', 'node-pty', 'package.json'), 'utf8'));
+if (nodePtyPackage.version !== EXPECTED_NODE_PTY_VERSION) {
+  throw new Error(
+    `Windows ConPTY smoke must use frozen node-pty ${EXPECTED_NODE_PTY_VERSION}; got ${nodePtyPackage.version}`
+  );
+}
+
 const binary = path.join(ROOT, 'dist', 'bin', 'dshx-tui.exe');
 const bridge = path.join(ROOT, 'dist', 'bin', 'dshx-ipc-bridge.exe');
 if (!fs.existsSync(binary)) throw new Error(`built DSHX TUI missing: ${binary}`);
@@ -158,6 +166,10 @@ try {
 
   await waitForOutput(state, 'DeepSeek Harness');
   await waitForProtocolNotification(traceFile, 'thread/started');
+  // thread/started precedes the asynchronous model/banner refresh. Wait for
+  // the deterministic stub model to render before touching the composer so
+  // startup cannot reset input that the ConPTY harness has already injected.
+  await waitForOutput(state, 'dshx-stub');
   term.resize(100, 40);
   const prompt = '你好，DSHX ConPTY resize';
   term.write(prompt);

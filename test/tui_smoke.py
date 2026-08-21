@@ -82,6 +82,12 @@ try:
             child.expect("DeepSeek Harness")
             transcript.append(child.before + child.after)
             wait_for_protocol_notification("thread/started")
+            # Startup is asynchronous: thread/started can arrive while the model
+            # banner still says "loading". Wait for the deterministic stub model
+            # to render before typing so the startup refresh cannot reset the
+            # composer underneath the simulated user input.
+            child.expect("dshx-stub")
+            transcript.append(child.before + child.after)
             child.setwinsize(40, 100)
             child.send(PROMPT)
             # Codex deliberately suppresses Enter for 120 ms after a detected
