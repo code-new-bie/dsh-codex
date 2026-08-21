@@ -31,6 +31,7 @@ const baseArgs = [
   '--manifest-path', MANIFEST,
   '--locked',
   '--edges', 'normal',
+  '--prefix', 'none',
   '-p', 'codex-tui'
 ];
 const tree = cargo([...baseArgs, '--format', '{p}']);
