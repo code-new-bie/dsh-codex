@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -84,7 +85,11 @@ try:
             wait_for_protocol_notification("thread/started")
             child.setwinsize(40, 100)
             child.send(PROMPT)
-            child.send("\r")
+            # With keyboard enhancement disabled, Linux PTYs report Enter as CR,
+            # while the macOS pexpect/raw-PTY path requires LF to surface the same
+            # KeyCode::Enter event. Keep each platform on the encoding its real
+            # PTY path accepts instead of emulating a terminal protocol here.
+            child.send("\n" if sys.platform == "darwin" else "\r")
             child.expect("DSHX protocol stub received:")
             transcript.append(child.before + child.after)
             child.expect(PROMPT)
