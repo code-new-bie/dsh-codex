@@ -10,6 +10,7 @@ import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPT = "你好，DSHX PTY resize"
+PROMPT_TAIL = "DSHX PTY resize"
 trace_fd, trace_name = tempfile.mkstemp(prefix="dshx-protocol-trace-", suffix=".jsonl")
 os.close(trace_fd)
 trace_path = pathlib.Path(trace_name)
@@ -90,10 +91,14 @@ try:
             transcript.append(child.before + child.after)
             child.setwinsize(40, 100)
             child.send(PROMPT)
-            # This PTY transport writes the UTF-8 prompt as a burst. Codex
-            # deliberately suppresses Enter for 120 ms after paste-like input;
-            # wait safely beyond that product behavior before submitting. Real
-            # keyboard/IME composition fidelity is covered by manual gate #12.
+            # A PTY write completing does not mean the TUI has consumed the
+            # bytes. On slower macOS runners, a fixed delay measured from write
+            # completion can expire while the prompt is still queued, making
+            # Enter arrive immediately after the paste-like burst is processed.
+            # Wait for the stable ASCII tail to be rendered first, then start
+            # Codex's 120 ms paste-submit guard delay.
+            child.expect(PROMPT_TAIL)
+            transcript.append(child.before + child.after)
             time.sleep(0.25)
             child.send("\r")
             child.expect("DSHX protocol stub received:")
