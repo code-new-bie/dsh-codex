@@ -15,6 +15,7 @@ const FORBIDDEN = [
   'codex-rollout',
   'codex-state'
 ];
+const RELEASE_FEATURE_ARGS = ['--no-default-features', '--features', 'dshx-remote-only'];
 
 function cargo(args) {
   const command = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
@@ -32,7 +33,8 @@ const baseArgs = [
   '--locked',
   '--edges', 'normal',
   '--prefix', 'none',
-  '-p', 'codex-tui'
+  '-p', 'codex-tui',
+  ...RELEASE_FEATURE_ARGS
 ];
 const tree = cargo([...baseArgs, '--format', '{p}']);
 if (tree.error) throw tree.error;
@@ -64,6 +66,6 @@ for (const name of offenders) {
   process.stderr.write(inverse.stderr || '');
 }
 process.stderr.write(
-  '\nRelease is blocked until codex-tui is built through an explicit remote-only Cargo feature profile and this gate passes.\n'
+  '\nRelease is blocked until codex-tui is built through the explicit dshx-remote-only Cargo feature profile and this gate passes.\n'
 );
 process.exit(1);

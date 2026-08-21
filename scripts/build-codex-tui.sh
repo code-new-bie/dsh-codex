@@ -12,7 +12,8 @@ OUT_DIR="${DSHX_TUI_OUT_DIR:-$ROOT/dist/bin}"
 mkdir -p "$OUT_DIR"
 CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
   --manifest-path "$CODEX_DIR/codex-rs/Cargo.toml" \
-  --locked --release -p codex-tui --bin codex-tui
+  --locked --release -p codex-tui --bin codex-tui \
+  --no-default-features --features dshx-remote-only
 CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
   --manifest-path "$CODEX_DIR/codex-rs/Cargo.toml" \
   --locked --release -p codex-stdio-to-uds --bin dshx-ipc-bridge
