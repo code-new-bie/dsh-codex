@@ -11,6 +11,26 @@ import { isSupportedNodeVersion } from '../src/cli/runtime.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = PACKAGE.version;
+const REQUIRED_RUNTIME_SERVICES = [
+  'agents',
+  'agentDefaultModel',
+  'llm',
+  'sessions',
+  'sessionPersistence',
+  'sessionQuery',
+  'sessionProjections',
+  'sessionTitle',
+  'attachments',
+  'tools',
+  'commands',
+  'compaction',
+  'subagents',
+  'permissionPresets',
+  'approval',
+  'userQuestions',
+  'skills',
+  'planMode'
+];
 
 function usage() {
   return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI, local IPC and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_IPC_BRIDGE_BIN      Override the packaged local IPC bridge (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
@@ -46,6 +66,16 @@ function commandDetail(command, result) {
   return `${command} is not runnable${result.stderr ? `: ${result.stderr.trim()}` : ''}`;
 }
 
+function withTimeout(promise, timeoutMs, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+
 function presentationHomeCheck(localServerInternals, loadError) {
   const home = dshxTuiHome();
   try {
@@ -70,6 +100,59 @@ function presentationHomeCheck(localServerInternals, loadError) {
   }
 }
 
+async function officialRuntimeCheck(runtimeBoot, loadError) {
+  if (typeof runtimeBoot?.bootDshxRuntime !== 'function') {
+    return { ok: false, detail: `official DSH modules failed to load: ${loadError ?? 'unknown error'}` };
+  }
+
+  let ctx;
+  let primaryError;
+  let cleanupError;
+  try {
+    // Doctor deliberately exercises the same official composition and profile
+    // watcher path as production startup. This catches missing native optional
+    // dependencies (for example sharp/koffi) that a static bundle-entry check
+    // cannot detect.
+    ctx = await withTimeout(
+      runtimeBoot.bootDshxRuntime({ cwd: process.cwd(), watch: true }),
+      20_000,
+      'official DSH composition boot'
+    );
+    const missing = REQUIRED_RUNTIME_SERVICES.filter((name) => ctx.get(name) == null);
+    if (missing.length > 0) {
+      throw new Error(`official DSH composition is missing required presentation services: ${missing.join(', ')}`);
+    }
+  } catch (error) {
+    primaryError = error;
+  } finally {
+    if (ctx) {
+      try {
+        await withTimeout(Promise.resolve(ctx.dispose?.()), 10_000, 'official DSH composition disposal');
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+  }
+
+  if (primaryError) {
+    const detail = primaryError instanceof Error ? primaryError.message : String(primaryError);
+    const cleanup = cleanupError
+      ? `; secondary cleanup failure: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+      : '';
+    return { ok: false, detail: `${detail}${cleanup}` };
+  }
+  if (cleanupError) {
+    return {
+      ok: false,
+      detail: `official DSH composition disposal failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`
+    };
+  }
+  return {
+    ok: true,
+    detail: `official DSH composition boot/dispose (${REQUIRED_RUNTIME_SERVICES.length} required services)`
+  };
+}
+
 async function doctor() {
   const executable = packagedTuiBinary();
   const tuiCheck = executable && fs.existsSync(executable)
@@ -81,37 +164,20 @@ async function doctor() {
     : { status: 127, stdout: '', stderr: '', error: null };
 
   let localServerInternals;
-  let dshxRuntimeEntries;
+  let runtimeBoot;
   let runtimeLoadError;
   try {
-    const [localServer, runtimeBoot] = await Promise.all([
+    const [localServer, loadedRuntimeBoot] = await Promise.all([
       import('../src/dsh/local-server.mjs'),
       import('../src/dsh/runtime-boot.mjs')
     ]);
     localServerInternals = localServer.localServerInternals;
-    dshxRuntimeEntries = runtimeBoot.dshxRuntimeEntries;
+    runtimeBoot = loadedRuntimeBoot;
   } catch (error) {
     runtimeLoadError = error instanceof Error ? error.message : String(error);
   }
   const homeCheck = presentationHomeCheck(localServerInternals, runtimeLoadError);
-
-  let runtimeDetail;
-  let runtimeOk = false;
-  if (!dshxRuntimeEntries) {
-    runtimeDetail = `official DSH modules failed to load: ${runtimeLoadError ?? 'unknown error'}`;
-  } else {
-    try {
-      const entries = dshxRuntimeEntries();
-      const required = ['llm', 'session', 'agent', 'permission', 'approval', 'user-questions', 'tools'];
-      const ids = new Set(entries.filter((entry) => !entry.disabled).map((entry) => entry.id));
-      const missing = required.filter((id) => !ids.has(id));
-      if (missing.length > 0) throw new Error(`missing official bundle entries: ${missing.join(', ')}`);
-      runtimeDetail = `official DSH bundle composition (${entries.length} entries)`;
-      runtimeOk = true;
-    } catch (error) {
-      runtimeDetail = error instanceof Error ? error.message : String(error);
-    }
-  }
+  const runtimeCheck = await officialRuntimeCheck(runtimeBoot, runtimeLoadError);
 
   const rows = [
     ['Node', `${process.version} (required: ${PACKAGE.engines.node})`, isSupportedNodeVersion(process.versions.node)],
@@ -125,7 +191,7 @@ async function doctor() {
       bridgeCheck.status === 0 ? `${bridge} (cross-platform Codex UDS)` : (bridge ? commandDetail(bridge, bridgeCheck) : 'not found'),
       bridgeCheck.status === 0
     ],
-    ['DeepSeek Harness', runtimeDetail, runtimeOk],
+    ['DeepSeek Harness', runtimeCheck.detail, runtimeCheck.ok],
     ['Presentation home / IPC path', homeCheck.detail, homeCheck.ok]
   ];
   for (const [name, detail, ok] of rows) {
