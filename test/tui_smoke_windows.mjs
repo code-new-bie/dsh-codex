@@ -176,17 +176,15 @@ try {
   await waitForOutput(state, 'dshx-stub');
   term.resize(100, 40);
   const prompt = '你好，DSHX ConPTY resize';
-  // Exercise the keyboard path like a user rather than injecting one
-  // paste-like burst. Codex intentionally suppresses Enter after detected
-  // paste input; this smoke validates CJK keyboard input, submit and resize.
-  for (const char of prompt) {
-    term.write(char);
-    await sleep(20);
-  }
-  await waitForOutput(state, prompt);
-  await sleep(100);
+  term.write(prompt);
+  // ConPTY writes this UTF-8 prompt as a burst. Codex deliberately suppresses
+  // Enter for 120 ms after paste-like input; wait safely beyond that product
+  // behavior before submitting. Real keyboard/IME fidelity is gate #12.
+  await sleep(250);
   term.write('\r');
   await waitForOutput(state, 'DSHX protocol stub received:');
+  // Validate the echoed assistant response rather than requiring the input
+  // composer's ANSI redraws to contain one contiguous copy of the prompt.
   await waitForOutput(state, prompt);
   process.stdout.write('Windows ConPTY DSHX local-IPC + CJK + resize smoke passed\n');
 } finally {

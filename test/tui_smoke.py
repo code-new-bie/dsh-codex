@@ -89,14 +89,12 @@ try:
             child.expect("dshx-stub")
             transcript.append(child.before + child.after)
             child.setwinsize(40, 100)
-            # Exercise the keyboard path like a user rather than injecting one
-            # paste-like burst. Codex intentionally suppresses Enter after a
-            # detected paste, which is product behavior and not what this smoke
-            # is meant to test. Character-wise input also verifies CJK handling.
-            for char in PROMPT:
-                child.send(char)
-                time.sleep(0.02)
-            time.sleep(0.10)
+            child.send(PROMPT)
+            # This PTY transport writes the UTF-8 prompt as a burst. Codex
+            # deliberately suppresses Enter for 120 ms after paste-like input;
+            # wait safely beyond that product behavior before submitting. Real
+            # keyboard/IME composition fidelity is covered by manual gate #12.
+            time.sleep(0.25)
             child.send("\r")
             child.expect("DSHX protocol stub received:")
             transcript.append(child.before + child.after)
