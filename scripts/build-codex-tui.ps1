@@ -4,6 +4,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 & (Join-Path $Root 'scripts\materialize-codex.ps1')
 node (Join-Path $Root 'scripts\verify-slash-contract.mjs')
+node (Join-Path $Root 'scripts\verify-codex-runtime-closure.mjs')
 $CodeXDir = if ($env:DSHX_CODEX_DIR) { $env:DSHX_CODEX_DIR } else { Join-Path $Root '.upstream\codex' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root '.build\codex' }
 $OutDir = if ($env:DSHX_TUI_OUT_DIR) { $env:DSHX_TUI_OUT_DIR } else { Join-Path $Root 'dist\bin' }
