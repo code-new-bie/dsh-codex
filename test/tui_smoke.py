@@ -89,12 +89,14 @@ try:
             child.expect("dshx-stub")
             transcript.append(child.before + child.after)
             child.setwinsize(40, 100)
-            child.send(PROMPT)
-            # Codex deliberately suppresses Enter for 120 ms after a detected
-            # paste-like burst so multiline paste cannot submit accidentally.
-            # pexpect writes the whole prompt as one burst; wait past that
-            # product behavior before simulating the user's submit key.
-            time.sleep(0.25)
+            # Exercise the keyboard path like a user rather than injecting one
+            # paste-like burst. Codex intentionally suppresses Enter after a
+            # detected paste, which is product behavior and not what this smoke
+            # is meant to test. Character-wise input also verifies CJK handling.
+            for char in PROMPT:
+                child.send(char)
+                time.sleep(0.02)
+            time.sleep(0.10)
             child.send("\r")
             child.expect("DSHX protocol stub received:")
             transcript.append(child.before + child.after)

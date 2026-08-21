@@ -158,7 +158,11 @@ try {
     env: stringEnv({
       TERM: 'xterm-256color',
       CODEX_HOME: codexHome,
-      DSHX_APP_SERVER_ENDPOINT: endpoint
+      DSHX_APP_SERVER_ENDPOINT: endpoint,
+      // node-pty provides a ConPTY transport, not a terminal emulator capable
+      // of negotiating Codex's keyboard enhancement protocol. Use Codex's
+      // supported fallback and exercise canonical terminal key bytes instead.
+      CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT: '1'
     })
   });
   const state = { output: '' };
@@ -172,14 +176,16 @@ try {
   await waitForOutput(state, 'dshx-stub');
   term.resize(100, 40);
   const prompt = '你好，DSHX ConPTY resize';
-  term.write(prompt);
-  // Codex suppresses Enter for 120 ms after a paste-like burst so multiline
-  // paste cannot submit accidentally. node-pty writes this prompt as a burst;
-  // wait beyond that product behavior before simulating the user's submit key.
-  await sleep(250);
-  // Pinned Codex requests kitty keyboard enhancement reporting. node-pty is a
-  // ConPTY transport rather than a terminal emulator, so encode Enter as CSI-u.
-  term.write('\x1b[13u');
+  // Exercise the keyboard path like a user rather than injecting one
+  // paste-like burst. Codex intentionally suppresses Enter after detected
+  // paste input; this smoke validates CJK keyboard input, submit and resize.
+  for (const char of prompt) {
+    term.write(char);
+    await sleep(20);
+  }
+  await waitForOutput(state, prompt);
+  await sleep(100);
+  term.write('\r');
   await waitForOutput(state, 'DSHX protocol stub received:');
   await waitForOutput(state, prompt);
   process.stdout.write('Windows ConPTY DSHX local-IPC + CJK + resize smoke passed\n');
