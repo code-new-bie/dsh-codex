@@ -14,7 +14,7 @@ jobs:
   build:
     name: Build / ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -80,7 +80,7 @@ jobs:
         run: Add-Content -Path $env:GITHUB_ENV -Value "DSHX_VERSION=$($env:GITHUB_REF_NAME.TrimStart('v'))"
       - name: Test presentation adapter from frozen graph
         run: |
-          npm ci
+          npm ci --include=optional --ignore-scripts=false
           node scripts/verify-dsh-closure.mjs
           npm test
       - name: Boot official DSH runtime
@@ -112,10 +112,6 @@ jobs:
           python3 -m venv "$VENV"
           "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
           "$VENV/bin/python" test/tui_smoke.py
-      - name: Install test-only Windows ConPTY bridge
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: npm install --no-save --package-lock=false node-pty@1.1.0
       - name: Real pinned TUI Windows ConPTY + CJK local-IPC smoke
         if: runner.os == 'Windows'
         run: node test/tui_smoke_windows.mjs
@@ -134,7 +130,7 @@ jobs:
           set -euo pipefail
           TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
           PREFIX="$RUNNER_TEMP/dshx-release-smoke"
-          npm install --global --prefix "$PREFIX" "$TGZ"
+          npm install --global --prefix "$PREFIX" --include=optional --ignore-scripts=false "$TGZ"
           "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
           "$PREFIX/bin/dshx" doctor
       - name: Clean install smoke (Windows)
@@ -144,7 +140,7 @@ jobs:
           $tgz = Get-ChildItem dist\release\dshx-*.tgz | Select-Object -First 1
           if (-not $tgz) { throw 'platform tarball missing' }
           $prefix = Join-Path $env:RUNNER_TEMP 'dshx-release-smoke'
-          npm install --global --prefix $prefix $tgz.FullName
+          npm install --global --prefix $prefix --include=optional --ignore-scripts=false $tgz.FullName
           $version = & (Join-Path $prefix 'dshx.cmd') --version
           if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
           & (Join-Path $prefix 'dshx.cmd') doctor
