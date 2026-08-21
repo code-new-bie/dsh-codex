@@ -161,6 +161,10 @@ try {
   term.resize(100, 40);
   const prompt = '你好，DSHX ConPTY resize';
   term.write(prompt);
+  // Codex suppresses Enter for 120 ms after a paste-like burst so multiline
+  // paste cannot submit accidentally. node-pty writes this prompt as a burst;
+  // wait beyond that product behavior before simulating the user's submit key.
+  await sleep(250);
   // Pinned Codex requests kitty keyboard enhancement reporting. node-pty is a
   // ConPTY transport rather than a terminal emulator, so encode Enter as CSI-u.
   term.write('\x1b[13u');
