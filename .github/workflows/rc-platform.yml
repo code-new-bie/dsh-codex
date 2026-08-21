@@ -36,9 +36,11 @@ jobs:
         with:
           node-version: 24
       - name: Install frozen dependency graph
-        run: npm ci
+        run: npm ci --include=optional --ignore-scripts=false
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
+      - name: Boot and dispose official DeepSeek Harness composition
+        run: node scripts/runtime-smoke.mjs
       - name: Build pinned Codex TUI + local IPC bridge
         shell: pwsh
         run: ./scripts/build-codex-tui.ps1
@@ -51,7 +53,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
       - name: Install test-only ConPTY bridge
         shell: pwsh
-        run: npm install --no-save --package-lock=false node-pty@1.1.0
+        run: npm install --no-save --package-lock=false --include=optional --ignore-scripts=false node-pty@1.1.0
       - name: Exercise real TUI through Windows ConPTY + CJK text
         run: node test/tui_smoke_windows.mjs
 
@@ -80,9 +82,11 @@ jobs:
         with:
           node-version: 24
       - name: Install frozen dependency graph
-        run: npm ci
+        run: npm ci --include=optional --ignore-scripts=false
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
+      - name: Boot and dispose official DeepSeek Harness composition
+        run: node scripts/runtime-smoke.mjs
       - name: Build pinned Codex TUI + local IPC bridge
         shell: bash
         run: bash scripts/build-codex-tui.sh
