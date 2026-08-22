@@ -1,0 +1,33 @@
+{
+  "name": "dsh-codex",
+  "version": "0.0.0-m1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "bin": {
+    "dshx": "./bin/dshx.mjs"
+  },
+  "scripts": {
+    "test": "node scripts/run-unit-tests.mjs",
+    "test:protocol": "node --test --test-force-exit test/protocol.test.mjs test/wire.test.mjs",
+    "test:dsh": "node --test --test-force-exit \"test/dsh-*.test.mjs\"",
+    "freeze:deps": "node scripts/freeze-deps.mjs",
+    "verify:release-deps": "node scripts/verify-dsh-closure.mjs . package-lock.json",
+    "stub": "node ./bin/dshx-stub-server.mjs",
+    "dev": "node ./bin/dshx.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-app-boot": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.8"
+  },
+  "devDependencies": {
+    "ws": "^8.18.0"
+  }
+}

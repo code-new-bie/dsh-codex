@@ -1,0 +1,17 @@
+diff --git a/codex-rs/tui/src/app.rs b/codex-rs/tui/src/app.rs
+--- a/codex-rs/tui/src/app.rs
++++ b/codex-rs/tui/src/app.rs
+@@ -471,7 +471,12 @@ fn resume_hint_for_resumable_thread(
+     rollout_path: Option<&Path>,
+ ) -> Option<String> {
+     let thread = resumable_thread(thread_id, thread_name, rollout_path)?;
+-    codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
++    let hint = codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id));
++    if crate::dshx_backend() {
++        hint.map(|hint| hint.replacen("codex", "dshx", 1))
++    } else {
++        hint
++    }
+ }
+ 
+ fn rollout_path_is_resumable(rollout_path: &Path) -> bool {

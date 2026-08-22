@@ -1,60 +1,149 @@
-# dsh-codex
+# DSHX (`dsh-codex`)
 
-A production-oriented DeepSeek Harness CLI that reuses the Codex terminal UX as closely as practical while keeping **DeepSeek Harness as the agent runtime and source of truth**.
+DSHX is a terminal frontend for **official DeepSeek Harness** that reuses a pinned Codex TUI thin fork instead of reimplementing a look-alike terminal UI.
 
-## Goal
+## Product contract
 
-`dsh-codex` is not another Codex-like TUI. The target is a thin Codex TUI fork plus a DSH backend compatibility layer, so the visible interaction model stays aligned with Codex while sessions, model routing, tools, sandboxing, approvals, skills and subagents remain owned by DSH.
-
-```text
-Codex TUI (thin fork)
-        │
-        │ app-server compatible protocol
-        ▼
-dsh-codex adapter
-        │
-        ▼
-DeepSeek Harness / Cordis
-        │
-        ├─ Session
-        ├─ Agent loop
-        ├─ LLM routing
-        ├─ Tools
-        ├─ Sandbox / Approval
-        ├─ Skills
-        └─ Subagents
-```
-
-## Product principles
-
-1. **DSH is authoritative.** No second session database and no second policy engine.
-2. **Reuse Codex UI instead of imitating it.** Keep the upstream TUI diff small and auditable.
-3. **Protocol boundary first.** Translate DSH Session/Agent/Event concepts into Codex Thread/Turn/Item concepts.
-4. **Production transports only.** Experimental remote transports are useful for development, not the final runtime dependency.
-5. **Windows is a first-class target.** Windows Terminal/PowerShell behavior is part of the release gate.
-
-## Repository status
-
-The repository is being reset around the thin-fork architecture. The earlier custom `pi-tui` prototype is preserved separately for reference and is **not** the target implementation.
-
-See:
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/ROADMAP.md`](docs/ROADMAP.md)
-- [`docs/UX-PARITY.md`](docs/UX-PARITY.md)
-- [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- [`SECURITY.md`](SECURITY.md)
-
-## Intended CLI
+From a code project, the normal user entry point is:
 
 ```bash
-dsh-codex
-# or eventually
-dsh --profile codex
+dshx
 ```
 
-The user-facing experience should intentionally track Codex for the welcome screen, composer, slash commands, model/permission pickers, approvals, tool cells, diffs, plans, steering, resume picker, status/footer, scrolling and keyboard behavior.
+No separate Codex installation, remote-mode command, bridge command, DSH WebUI, or manual profile plumbing is part of the production UX.
+
+The interaction target is the pinned Codex CLI/TUI: welcome screen, composer, slash commands, model and permission pickers, approvals, ask-user flows, tool/shell cells, diffs, plan/reasoning presentation, steering, Ctrl+C interrupt, resume, status/footer, scrolling, resize and mouse behavior. Windows Terminal and CJK/IME are first-class release gates.
+
+## Ownership boundary
+
+We maintain only:
+
+- the Codex TUI thin fork and upstream sync patches;
+- TUI behavior and UX parity;
+- the `dshx` launcher, local presentation transport and packaging;
+- the thinnest practical projection from DSH **public APIs/events** into the TUI protocol.
+
+We do **not** maintain, fork or recreate DeepSeek Harness capabilities. DSH owns the agent loop, sessions, model routing, tools, sandbox, approval policy, skills, subagents, plugins, jobs/workflows and persistence.
+
+If DSH does not expose a capability, DSHX waits for upstream or explicitly hides/degrades the corresponding UI. It does not implement a replacement runtime.
+
+```text
+pinned Codex TUI thin fork       ← DSHX presentation
+        │
+        │ WebSocket framing over private local UDS
+        ▼
+dshx-ipc-bridge                  ← tiny transport bridge; no runtime state
+        │
+        │ JSONL over child stdio
+        ▼
+DSHX presentation adapter        ← translation only
+        │
+════════════════ ownership boundary ════════════════
+        │ official DSH public APIs/events
+        ▼
+Official DeepSeek Harness        ← Agent / Session / tools / policy / persistence
+```
+
+There is **no TCP listener in the production launch path**. The bridge reuses Codex's own cross-platform `codex_uds` implementation so the Rust TUI and Node DSH composition can stay in separate processes without unsafe FFI.
+
+## Current integration status
+
+`release/1.0-rc` is the sole production release-candidate integration branch, reviewed directly against `main` in Draft PR #11. Older M0/M1/thin-launcher/transport PRs are historical workstreams rather than release dependencies.
+
+The selected production transport is the small local-IPC bridge above. The alternative experiment that added a larger direct-stdio transport implementation inside the Codex client is intentionally excluded from the 1.0 line to keep the maintained upstream diff smaller.
+
+The candidate implementation includes:
+
+- zero-argument `dshx` launch and `dshx resume` flows;
+- official DSH runtime composition and exact supported DSH rc.8 release-closure checks;
+- DSH-backed session/history, model, permissions, approvals, ask-user, tools/shell/diffs, plan/reasoning, steering/interrupt, rename, fork/compaction, skills and subagent presentation boundaries;
+- pinned Codex TUI build plus packaged cross-platform local IPC bridge;
+- an executable visible-slash-command contract so every runtime-owned command left visible is either DSH-backed or the build fails;
+- release artifacts for Linux x64, Windows x64, macOS arm64 and macOS x64;
+- clean-install `dshx doctor`, including a real local UDS + WebSocket-framing ping/pong data-plane self-check;
+- Linux/macOS real-TUI PTY smoke and Windows real-TUI ConPTY + Chinese-text smoke through the production local-IPC topology;
+- fail-closed ownership/security tests that keep DSH authoritative.
+
+A commit is not called 1.0-ready merely because these paths exist. The exact release candidate must pass the repository CI/release gates and the side-by-side Windows Terminal/CJK/IME acceptance pass described in `docs/RELEASE-READINESS.md` and `docs/UX-PARITY.md`.
+
+## Install a release artifact
+
+Production users should install the **platform-specific tarball generated by a published DSHX release**, not build the pinned Codex workspace themselves.
+
+1. Download the tarball for your platform from the chosen GitHub release and verify its SHA-256 against that release's `SHA256SUMS`.
+2. Install the downloaded artifact globally with npm:
+
+```bash
+npm install --global ./dshx-<version>-<platform>-<arch>.tgz
+```
+
+3. Verify the installed product, then enter any code project and start it:
+
+```bash
+dshx --version
+dshx doctor
+cd /path/to/project
+dshx
+```
+
+Windows PowerShell uses the same npm install command. For a 1.0 release-candidate acceptance run, use `scripts/windows-rc-acceptance.ps1` so the tarball checksum, isolated install, `dshx --version` and `dshx doctor` are verified before the real Windows Terminal/IME comparison.
+
+The release tarball already contains the matching native `dshx-tui` and `dshx-ipc-bridge` binaries. A separate Codex install, DSH WebUI process, bridge command or remote-mode setup is not part of installation.
+
+## Build from source
+
+Source builds are for contributors and DSHX development. The pinned DSH runtime supports Node.js `^22.19.0 || >=24.0.0`; DSHX 1.0 standardizes dependency freezing, CI and release builds on **Node.js 24 LTS / npm 11**. Rust/Cargo, Git and the platform toolchain required by the pinned Codex workspace are also required for native TUI builds.
+
+The release dependency graph is frozen outside CI so GitHub Actions never mutates the candidate branch. On a trusted Node 24 LTS machine with npm-registry access, generate and verify the lock with:
+
+```bash
+npm run freeze:deps
+```
+
+Review and commit the generated `package-lock.json`. Do not hand-edit or fabricate it. After the graph has been frozen, all contributor/CI installs use:
+
+```bash
+npm ci
+```
+
+Linux/macOS:
+
+```bash
+./scripts/build-codex-tui.sh
+npm link
+dshx doctor
+dshx
+```
+
+Windows PowerShell:
+
+```powershell
+.\scripts\build-codex-tui.ps1
+npm link
+dshx doctor
+dshx
+```
+
+`dshx doctor` checks the DSH-compatible Node runtime, the packaged TUI, the local IPC data plane, the official DSH composition and the isolated DSHX presentation home/IPC path.
+
+## Release model
+
+GitHub Actions is an automation surface rather than the authority for repository correctness. Ordinary PR/main CI is deliberately lean: one Node 24 core job followed by one Linux TUI job. `release/**` adds real Windows ConPTY and macOS PTY/CJK/resize gates. Only `v*` tags run the full platform packaging, clean-install, provenance, checksum and publication matrix.
+
+The release workflow builds platform-specific installable tarballs from the frozen npm graph, builds the pinned TUI and IPC bridge, clean-installs each artifact, runs `dshx doctor`, exercises Linux/macOS PTY and Windows ConPTY real-TUI gates, verifies cross-platform provenance, and publishes SHA-256 checksums for both tarballs and provenance sidecars. Release candidates containing `-` in the tag are published as prereleases.
+
+The publishable `npm-shrinkwrap.json` inside each artifact is derived from the reviewed source `package-lock.json`; packaging does not resolve a second dependency graph. Release sidecars record the source-lock SHA-256 plus the pinned Codex and DSH commits.
+
+## Design references
+
+- `docs/ARCHITECTURE.md`
+- `docs/RUNTIME-INTEGRATION.md`
+- `docs/DSH-CAPABILITY-MATRIX.md`
+- `docs/ROADMAP.md`
+- `docs/UX-PARITY.md`
+- `docs/RELEASE-READINESS.md`
+- `SECURITY.md`
 
 ## License
 
-Apache-2.0. Any vendored upstream code keeps its original notices and license requirements.
+Apache-2.0 for project-owned code. Synchronized upstream code keeps its applicable upstream notices and license requirements.
