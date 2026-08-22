@@ -57,7 +57,6 @@ copy('bin/dshx.mjs');
 copy('src/cli');
 copy('src/dsh');
 copy('src/protocol');
-copy('config');
 copy('README.md');
 copy('NOTICE');
 copy('upstream/CODEX_COMMIT');
@@ -95,7 +94,6 @@ const packageJson = {
     'src/cli',
     'src/dsh',
     'src/protocol',
-    'config',
     'dist/bin',
     'upstream',
     'README.md',
