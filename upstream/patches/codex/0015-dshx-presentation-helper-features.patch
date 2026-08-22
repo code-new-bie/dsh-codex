@@ -1,0 +1,142 @@
+diff --git a/codex-rs/utils/plugins/Cargo.toml b/codex-rs/utils/plugins/Cargo.toml
+--- a/codex-rs/utils/plugins/Cargo.toml
++++ b/codex-rs/utils/plugins/Cargo.toml
+@@ -9,10 +9,14 @@ name = "codex_utils_plugins"
+ path = "src/lib.rs"
+ 
++[features]
++default = ["embedded"]
++embedded = ["dep:codex-exec-server"]
++
+ [lints]
+ workspace = true
+ 
+ [dependencies]
+-codex-exec-server = { workspace = true }
++codex-exec-server = { workspace = true, optional = true }
+ codex-exec-server-protocol = { workspace = true }
+ codex-utils-absolute-path = { workspace = true }
+ codex-utils-path-uri = { workspace = true }
+diff --git a/codex-rs/utils/plugins/src/plugin_namespace.rs b/codex-rs/utils/plugins/src/plugin_namespace.rs
+--- a/codex-rs/utils/plugins/src/plugin_namespace.rs
++++ b/codex-rs/utils/plugins/src/plugin_namespace.rs
+@@ -1,5 +1,6 @@
+ //! Resolve plugin namespace from skill file paths by walking ancestors for `plugin.json`.
+ 
++#[cfg(feature = "embedded")]
+ use codex_exec_server::ExecutorFileSystem;
+ use codex_exec_server_protocol::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
+ use codex_utils_path_uri::PathUri;
+@@ -75,6 +76,7 @@ struct RawPluginManifestName {
+ }
+ 
+ /// Returns the plugin manifest `name` defined directly below `plugin_root`.
++#[cfg(feature = "embedded")]
+ pub async fn plugin_namespace_for_root_uri(
+     fs: &dyn ExecutorFileSystem,
+     plugin_root: &PathUri,
+diff --git a/codex-rs/plugin/Cargo.toml b/codex-rs/plugin/Cargo.toml
+--- a/codex-rs/plugin/Cargo.toml
++++ b/codex-rs/plugin/Cargo.toml
+@@ -8,6 +8,10 @@ name = "codex_plugin"
+ path = "src/lib.rs"
+ 
++[features]
++default = ["embedded"]
++embedded = ["codex-utils-plugins/embedded"]
++
+ [lints]
+ workspace = true
+ 
+@@ -16,7 +20,7 @@ codex-config = { workspace = true }
+ codex-protocol = { workspace = true }
+ codex-utils-absolute-path = { workspace = true }
+ codex-utils-path-uri = { workspace = true }
+-codex-utils-plugins = { workspace = true }
++codex-utils-plugins = { path = "../utils/plugins", default-features = false }
+ thiserror = { workspace = true }
+ 
+ [dev-dependencies]
+diff --git a/codex-rs/feedback/Cargo.toml b/codex-rs/feedback/Cargo.toml
+--- a/codex-rs/feedback/Cargo.toml
++++ b/codex-rs/feedback/Cargo.toml
+@@ -5,12 +5,16 @@ edition.workspace = true
+ license.workspace = true
+ 
++[features]
++default = ["embedded"]
++embedded = ["dep:codex-login"]
++
+ [lints]
+ workspace = true
+ 
+ [dependencies]
+ anyhow = { workspace = true }
+ codex-http-client = { workspace = true }
+-codex-login = { workspace = true }
++codex-login = { workspace = true, optional = true }
+ codex-protocol = { workspace = true }
+ mime_guess = { workspace = true }
+ sentry = { version = "0.46" }
+diff --git a/codex-rs/feedback/src/lib.rs b/codex-rs/feedback/src/lib.rs
+--- a/codex-rs/feedback/src/lib.rs
++++ b/codex-rs/feedback/src/lib.rs
+@@ -14,6 +14,7 @@ use anyhow::anyhow;
+ use codex_http_client::ClientRouteClass;
+ use codex_http_client::HttpClientFactory;
+ use codex_http_client::RouteAwareClientPool;
++#[cfg(feature = "embedded")]
+ use codex_login::AuthEnvTelemetry;
+ use codex_protocol::ThreadId;
+ use codex_protocol::protocol::SessionSource;
+@@ -133,6 +134,7 @@ pub fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
+     );
+ }
+ 
++#[cfg(feature = "embedded")]
+ pub fn emit_feedback_request_tags_with_auth_env(
+     tags: &FeedbackRequestTags<'_>,
+     auth_env: &AuthEnvTelemetry,
+diff --git a/codex-rs/tui/Cargo.toml b/codex-rs/tui/Cargo.toml
+--- a/codex-rs/tui/Cargo.toml
++++ b/codex-rs/tui/Cargo.toml
+@@ -27,7 +27,7 @@ embedded = [
+     "dep:codex-connectors",
+     "dep:codex-core-plugins",
+     "dep:codex-exec-server",
+-    "dep:codex-feedback",
++    "codex-feedback/embedded",
+     "dep:codex-login",
+     "dep:codex-model-provider",
+     "dep:codex-models-manager",
+-    "dep:codex-plugin",
++    "codex-plugin/embedded",
+     "dep:codex-rollout",
+     "dep:codex-state",
+     "dep:codex-utils-oss",
+-    "dep:codex-utils-plugins",
++    "codex-utils-plugins/embedded",
+ ]
+ dshx-remote-only = []
+@@ -64,7 +64,7 @@ codex-exec-server = { workspace = true, optional = true }
+ codex-features = { workspace = true }
+-codex-feedback = { workspace = true, optional = true }
++codex-feedback = { path = "../feedback", default-features = false }
+ codex-file-search = { workspace = true }
+ codex-git-utils = { workspace = true }
+ codex-http-client = { workspace = true }
+@@ -77,7 +77,7 @@ codex-models-manager = { workspace = true, optional = true }
+ codex-otel = { workspace = true }
+-codex-plugin = { workspace = true, optional = true }
++codex-plugin = { path = "../plugin", default-features = false }
+ codex-protocol = { workspace = true }
+ codex-rollout = { workspace = true, optional = true }
+ codex-sandboxing = { workspace = true }
+@@ -96,7 +96,7 @@ codex-utils-oss = { workspace = true, optional = true }
+ codex-utils-path = { workspace = true }
+ codex-utils-path-uri = { workspace = true }
+-codex-utils-plugins = { workspace = true, optional = true }
++codex-utils-plugins = { path = "../utils/plugins", default-features = false }
+ codex-utils-sandbox-summary = { workspace = true }
+ codex-utils-sleep-inhibitor = { workspace = true }
+ codex-utils-string = { workspace = true }
