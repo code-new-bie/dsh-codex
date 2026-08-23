@@ -145,10 +145,23 @@ execFileSync(process.execPath, [
   shrinkwrapPath
 ], { cwd: root, stdio: 'inherit' });
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const packArgs = ['pack', stage, '--pack-destination', out, '--json'];
+let npmExecutable = 'npm';
+let npmArgs = packArgs;
+if (platform === 'win32') {
+  // Node 24 no longer reliably spawns .cmd launchers through execFileSync.
+  // setup-node ships npm's JavaScript CLI beside node.exe, so execute that
+  // directly with the exact Node runtime used by the release job.
+  const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!fs.existsSync(npmCli)) {
+    throw new Error(`Bundled npm CLI is missing: ${npmCli}`);
+  }
+  npmExecutable = process.execPath;
+  npmArgs = [npmCli, ...packArgs];
+}
 const packOutput = execFileSync(
-  npm,
-  ['pack', stage, '--pack-destination', out, '--json'],
+  npmExecutable,
+  npmArgs,
   { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
 );
 const packed = JSON.parse(packOutput);
