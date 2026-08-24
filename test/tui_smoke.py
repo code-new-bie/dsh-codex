@@ -11,7 +11,7 @@ import pexpect
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPT = "你好，DSHX PTY resize"
 PROMPT_TAIL = "DSHX PTY resize"
-EXPECTED_CI_TUI_VERSION = "1.0.0-ci"
+EXPECTED_TUI_VERSION = os.environ.get("DSHX_VERSION", "1.0.0-ci")
 EXPECTED_MODEL_DISPLAY_NAME = "DSHX Protocol Stub"
 trace_fd, trace_name = tempfile.mkstemp(prefix="dshx-protocol-trace-", suffix=".jsonl")
 os.close(trace_fd)
@@ -87,7 +87,7 @@ try:
             # validates visible content rather than terminal styling bytes.
             child.expect("DeepSeek Harness")
             transcript.append(child.before + child.after)
-            child.expect(f"v{EXPECTED_CI_TUI_VERSION}")
+            child.expect(f"v{EXPECTED_TUI_VERSION}")
             transcript.append(child.before + child.after)
             wait_for_protocol_notification("thread/started")
             # Startup is asynchronous: thread/started can arrive while the model
