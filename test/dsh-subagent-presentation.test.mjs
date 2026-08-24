@@ -55,7 +55,7 @@ test('DSH subagent lineage becomes native Codex thread_spawn metadata without fa
   });
 });
 
-test('release loaded-thread projection enumerates official DSH live agents including children', () => {
+test('release loaded-thread wire response lists official DSH live ids while rich child metadata stays on thread projections', () => {
   const root = {
     id: 'root-1',
     status: 'idle',
@@ -74,8 +74,9 @@ test('release loaded-thread projection enumerates official DSH live agents inclu
   };
 
   const response = adapter.loadedThreadList();
-  assert.equal(response.result.data.length, 2);
-  const projectedChild = response.result.data.find((thread) => thread.id === 'child-1');
+  assert.deepEqual(response.result.data, ['root-1', 'child-1']);
+
+  const projectedChild = adapter.liveAgentThread(child);
   assert.equal(projectedChild.name, 'Scout');
   assert.equal(projectedChild.status.type, 'active');
   assert.equal(projectedChild.canAcceptDirectInput, false);
