@@ -10,6 +10,8 @@ import * as pty from 'node-pty';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED_NODE_PTY_VERSION = '1.2.0-beta.15';
+const EXPECTED_CI_TUI_VERSION = '1.0.0-ci';
+const EXPECTED_MODEL_DISPLAY_NAME = 'DSHX Protocol Stub';
 
 function stripTerminalControl(value) {
   return value
@@ -168,12 +170,15 @@ try {
   const state = { output: '' };
   dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
-  await waitForOutput(state, 'DeepSeek Harness');
+  await waitForOutput(state, `DeepSeek Harness (v${EXPECTED_CI_TUI_VERSION})`);
   await waitForProtocolNotification(traceFile, 'thread/started');
   // thread/started precedes the asynchronous model/banner refresh. Wait for
-  // the deterministic stub model to render before touching the composer so
-  // startup cannot reset input that the ConPTY harness has already injected.
-  await waitForOutput(state, 'dshx-stub');
+  // the human-readable model label, not the provider-aware internal wire id.
+  await waitForOutput(state, EXPECTED_MODEL_DISPLAY_NAME);
+  const startupTranscript = stripTerminalControl(state.output);
+  if (startupTranscript.includes('dshx:Wy')) {
+    throw new Error(`opaque DSHX model wire id leaked into TUI presentation:\n${startupTranscript}`);
+  }
   term.resize(100, 40);
   const prompt = '你好，DSHX ConPTY resize';
   term.write(prompt);
