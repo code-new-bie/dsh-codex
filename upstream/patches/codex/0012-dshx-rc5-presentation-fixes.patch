@@ -16,7 +16,7 @@ diff --git a/codex-rs/tui/src/model_catalog.rs b/codex-rs/tui/src/model_catalog.
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
-@@ -456,7 +456,10 @@ impl ChatWidget {
+@@ -456,6 +456,10 @@ impl ChatWidget {
      pub(super) fn refresh_model_display(&mut self) {
          let effective = self.effective_collaboration_mode();
 -        self.session_header.set_model(effective.model());
@@ -28,7 +28,7 @@ diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidg
          // Keep composer paste affordances aligned with the currently effective model.
          self.sync_image_paste_enabled();
          self.sync_service_tier_commands();
-@@ -569,7 +572,9 @@ impl ChatWidget {
+@@ -569,6 +573,8 @@ impl ChatWidget {
          if model.is_empty() {
              DEFAULT_MODEL_DISPLAY_NAME
          } else {
@@ -41,7 +41,7 @@ diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidg
 diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chatwidget/session_flow.rs
 --- a/codex-rs/tui/src/chatwidget/session_flow.rs
 +++ b/codex-rs/tui/src/chatwidget/session_flow.rs
-@@ -119,7 +119,11 @@ impl ChatWidget {
+@@ -119,8 +119,12 @@ impl ChatWidget {
          self.sync_personality_command_enabled();
          self.sync_plugins_command_enabled();
          self.sync_goal_command_enabled();
@@ -58,7 +58,7 @@ diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chat
 diff --git a/codex-rs/tui/src/history_cell/session.rs b/codex-rs/tui/src/history_cell/session.rs
 --- a/codex-rs/tui/src/history_cell/session.rs
 +++ b/codex-rs/tui/src/history_cell/session.rs
-@@ -126,12 +126,22 @@ pub(crate) fn new_session_info(
+@@ -126,13 +126,23 @@ pub(crate) fn new_session_info(
      auth_plan: Option<PlanType>,
      show_fast_status: bool,
  ) -> SessionInfoCell {
@@ -84,7 +84,7 @@ diff --git a/codex-rs/tui/src/history_cell/session.rs b/codex-rs/tui/src/history
      )
      .with_yolo_mode(has_yolo_permissions(
          session.approval_policy,
-@@ -175,7 +185,7 @@ pub(crate) fn new_session_info(
+@@ -175,8 +185,8 @@ pub(crate) fn new_session_info(
                  .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
          {
              parts.push(Box::new(tooltips));
@@ -97,7 +97,7 @@ diff --git a/codex-rs/tui/src/history_cell/session.rs b/codex-rs/tui/src/history
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-@@ -681,7 +681,13 @@ impl ChatWidget {
+@@ -681,11 +681,18 @@ impl ChatWidget {
              StatusLineItem::WeeklyLimit => {
                  let (window, is_secondary) = self
                      .rate_limit_snapshots_by_limit_id
