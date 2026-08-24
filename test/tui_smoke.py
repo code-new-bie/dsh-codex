@@ -11,6 +11,8 @@ import pexpect
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPT = "你好，DSHX PTY resize"
 PROMPT_TAIL = "DSHX PTY resize"
+EXPECTED_CI_TUI_VERSION = "1.0.0-ci"
+EXPECTED_MODEL_DISPLAY_NAME = "DSHX Protocol Stub"
 trace_fd, trace_name = tempfile.mkstemp(prefix="dshx-protocol-trace-", suffix=".jsonl")
 os.close(trace_fd)
 trace_path = pathlib.Path(trace_name)
@@ -80,15 +82,19 @@ try:
         )
         transcript = []
         try:
-            child.expect("DeepSeek Harness")
+            child.expect(f"DeepSeek Harness \\(v{EXPECTED_CI_TUI_VERSION}\\)")
             transcript.append(child.before + child.after)
             wait_for_protocol_notification("thread/started")
             # Startup is asynchronous: thread/started can arrive while the model
-            # banner still says "loading". Wait for the deterministic stub model
-            # to render before typing so the startup refresh cannot reset the
-            # composer underneath the simulated user input.
-            child.expect("dshx-stub")
+            # banner still says "loading". Wait for the human-readable model label,
+            # not the provider-aware internal wire id.
+            child.expect(EXPECTED_MODEL_DISPLAY_NAME)
             transcript.append(child.before + child.after)
+            rendered_startup = "".join(transcript)
+            if "dshx:Wy" in rendered_startup:
+                raise AssertionError(
+                    "opaque DSHX model wire id leaked into TUI presentation:\n" + rendered_startup
+                )
             child.setwinsize(40, 100)
             child.send(PROMPT)
             # A PTY write completing does not mean the TUI has consumed the
