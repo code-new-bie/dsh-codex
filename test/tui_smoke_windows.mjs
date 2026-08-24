@@ -10,7 +10,7 @@ import * as pty from 'node-pty';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED_NODE_PTY_VERSION = '1.2.0-beta.15';
-const EXPECTED_CI_TUI_VERSION = '1.0.0-ci';
+const EXPECTED_TUI_VERSION = process.env.DSHX_VERSION ?? '1.0.0-ci';
 const EXPECTED_MODEL_DISPLAY_NAME = 'DSHX Protocol Stub';
 
 function stripTerminalControl(value) {
@@ -170,12 +170,15 @@ try {
   const state = { output: '' };
   dataDisposable = term.onData((chunk) => { state.output += chunk; });
 
-  await waitForOutput(state, `DeepSeek Harness (v${EXPECTED_CI_TUI_VERSION})`);
+  await waitForOutput(state, `DeepSeek Harness (v${EXPECTED_TUI_VERSION})`);
   await waitForProtocolNotification(traceFile, 'thread/started');
   // thread/started precedes the asynchronous model/banner refresh. Wait for
   // the human-readable model label, not the provider-aware internal wire id.
   await waitForOutput(state, EXPECTED_MODEL_DISPLAY_NAME);
   const startupTranscript = stripTerminalControl(state.output);
+  if (startupTranscript.includes('v0.0.0')) {
+    throw new Error(`Codex crate version leaked into DSHX startup presentation:\n${startupTranscript}`);
+  }
   if (startupTranscript.includes('dshx:Wy')) {
     throw new Error(`opaque DSHX model wire id leaked into TUI presentation:\n${startupTranscript}`);
   }
