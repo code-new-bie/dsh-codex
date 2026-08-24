@@ -82,7 +82,12 @@ try:
         )
         transcript = []
         try:
-            child.expect(f"DeepSeek Harness \\(v{EXPECTED_CI_TUI_VERSION}\\)")
+            # Ratatui can place ANSI style transitions between the product name
+            # and the version suffix. Assert them independently so the smoke
+            # validates visible content rather than terminal styling bytes.
+            child.expect("DeepSeek Harness")
+            transcript.append(child.before + child.after)
+            child.expect(f"v{EXPECTED_CI_TUI_VERSION}")
             transcript.append(child.before + child.after)
             wait_for_protocol_notification("thread/started")
             # Startup is asynchronous: thread/started can arrive while the model
@@ -91,6 +96,10 @@ try:
             child.expect(EXPECTED_MODEL_DISPLAY_NAME)
             transcript.append(child.before + child.after)
             rendered_startup = "".join(transcript)
+            if "v0.0.0" in rendered_startup:
+                raise AssertionError(
+                    "Codex crate version leaked into DSHX startup presentation:\n" + rendered_startup
+                )
             if "dshx:Wy" in rendered_startup:
                 raise AssertionError(
                     "opaque DSHX model wire id leaked into TUI presentation:\n" + rendered_startup
