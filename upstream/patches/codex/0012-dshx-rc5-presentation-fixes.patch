@@ -118,3 +118,27 @@ diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/c
              StatusLineItem::ContextWindowSize => self
                  .status_line_context_window_size()
                  .map(|cws| format!("{} window", format_tokens_compact(cws))),
+diff --git a/codex-rs/tui/src/startup_draft.rs b/codex-rs/tui/src/startup_draft.rs
+--- a/codex-rs/tui/src/startup_draft.rs
++++ b/codex-rs/tui/src/startup_draft.rs
+@@ -447,6 +447,12 @@ fn startup_session_header(config: Option<&Config>) -> Box<dyn HistoryCell> {
+         || PathBuf::from("loading"),
+         |config| config.cwd.to_path_buf(),
+     );
++    let header_version = if crate::dshx_backend() {
++        option_env!("DSHX_VERSION").unwrap_or(CODEX_CLI_VERSION)
++    } else {
++        CODEX_CLI_VERSION
++    };
+     Box::new(
+         history_cell::SessionHeaderHistoryCell::new_with_style(
+             "loading".to_string(),
+@@ -456,7 +462,7 @@ fn startup_session_header(config: Option<&Config>) -> Box<dyn HistoryCell> {
+             /*reasoning_effort*/ None,
+             /*show_fast_status*/ false,
+             directory,
+-            CODEX_CLI_VERSION,
++            header_version,
+         )
+         .with_yolo_mode(config.is_some_and(history_cell::is_yolo_mode)),
+     )
