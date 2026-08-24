@@ -1,4 +1,5 @@
-import { dshThreadFromSnapshot } from './codex-shapes.mjs';
+import path from 'node:path';
+import { decodeDshModel, dshThreadFromSnapshot, normalizeCodexEffort } from './codex-shapes.mjs';
 import { DshxProductAdapter } from './product-adapter.mjs';
 import { codexPlanTarget, threadSettingsUpdatedNotification } from './plan-presentation.mjs';
 import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
@@ -109,9 +110,11 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
   }
 
   loadedThreadList() {
+    // Pinned Codex ThreadLoadedListResponse.data is Array<string>. Keep rich
+    // thread metadata on thread/list/read/started and expose only live IDs here.
     return {
       result: {
-        data: this.driver.listLive().map((agent) => this.liveAgentThread(agent))
+        data: this.driver.listLive().map((agent) => String(agent.id))
       }
     };
   }
@@ -159,6 +162,8 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     switch (method) {
       case 'command/exec':
         return this.commandExec(params);
+      case 'config/batchWrite':
+        return this.configBatchWrite(params);
       case 'thread/loaded/list':
         return this.loadedThreadList();
       case 'thread/fork':
@@ -198,6 +203,67 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     return { result: await this.workspaceCommands().execute(params) };
   }
 
+  async configBatchWrite(params = {}) {
+    const edits = Array.isArray(params.edits) ? params.edits : [];
+    if (edits.length === 0) throw new Error('DSHX config/batchWrite requires at least one model-selection edit');
+
+    const supported = new Set(['model', 'model_reasoning_effort']);
+    for (const edit of edits) {
+      if (!supported.has(edit?.keyPath)) {
+        throw new Error(`DSHX config/batchWrite refuses Codex-owned setting: ${String(edit?.keyPath ?? '')}`);
+      }
+      if (edit?.mergeStrategy != null && edit.mergeStrategy !== 'replace') {
+        throw new Error(`DSHX config/batchWrite supports replace semantics only: ${String(edit.keyPath)}`);
+      }
+    }
+
+    const defaults = this.ctx.get('agentDefaultModel');
+    const llm = this.ctx.get('llm');
+    if (!defaults?.currentSelection || !defaults?.saveSelection) {
+      throw new Error('DSHX requires DSH service: agentDefaultModel.saveSelection');
+    }
+    if (!llm?.resolveCallConfig) throw new Error('DSHX requires DSH service: llm.resolveCallConfig');
+
+    const current = defaults.currentSelection();
+    let requested = { provider: current.provider, model: current.model };
+    if (current.reasoningEffort !== undefined) requested.reasoningEffort = current.reasoningEffort;
+
+    const modelEdit = edits.find((edit) => edit.keyPath === 'model');
+    if (modelEdit) {
+      const decoded = decodeDshModel(modelEdit.value);
+      if (!decoded) throw new Error('DSHX persists default models only from its DSH-backed opaque model catalog');
+      requested = { ...decoded };
+    }
+
+    const effortEdit = edits.find((edit) => edit.keyPath === 'model_reasoning_effort');
+    if (effortEdit) {
+      const effort = normalizeCodexEffort(effortEdit.value);
+      requested = { provider: requested.provider, model: requested.model };
+      if (effort !== undefined) requested.reasoningEffort = effort;
+    }
+
+    const resolved = await llm.resolveCallConfig(requested);
+    const persisted = { provider: resolved.provider, model: resolved.model };
+    // Preserve provider-default semantics when the TUI clears its reasoning
+    // setting; otherwise persist the DSH-resolved explicit effort.
+    if (requested.reasoningEffort !== undefined) {
+      persisted.reasoningEffort = resolved.reasoningEffort ?? requested.reasoningEffort;
+    }
+    await defaults.saveSelection(persisted);
+
+    this._configRevision = (this._configRevision ?? 0) + 1;
+    return {
+      result: {
+        status: 'ok',
+        version: `dshx-${this._configRevision}`,
+        // Codex requires an absolute path in ConfigWriteResponse. Persistence is
+        // actually owned by DSH settings; this marker stays inside presentation home.
+        filePath: path.join(this.home, 'dsh-settings'),
+        overriddenMetadata: null
+      }
+    };
+  }
+
   async richUserTurn(method, params = {}) {
     const threadId = String(params.threadId ?? '');
     const controller = this.controllers.get(threadId);
@@ -208,11 +274,15 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
     const content = await codexInputToDshContent(this.ctx, params.input ?? []);
     const clear = controller.prepareUserContent(content);
     try {
+      // Pinned Codex serializes an unset reasoning effort as JSON null. DSH
+      // interprets absence as provider default, so never forward null as an
+      // explicit provider effort.
+      const normalizedParams = params.effort == null ? { ...params, effort: undefined } : params;
       // Preserve the original base/product validation path. The fallback text is
       // consumed only if no prepared rich content exists; it also keeps the
       // base adapter's expected text-only parameter shape intact.
       return await super.dispatch(method, {
-        ...params,
+        ...normalizedParams,
         input: [{ type: 'text', text: dshContentText(content) }]
       });
     } finally {
