@@ -237,7 +237,7 @@ export class DshxReleaseAdapter extends DshxProductAdapter {
 
     const effortEdit = edits.find((edit) => edit.keyPath === 'model_reasoning_effort');
     if (effortEdit) {
-      const effort = normalizeCodexEffort(effortEdit.value);
+      const effort = effortEdit.value == null ? undefined : normalizeCodexEffort(effortEdit.value);
       requested = { provider: requested.provider, model: requested.model };
       if (effort !== undefined) requested.reasoningEffort = effort;
     }
