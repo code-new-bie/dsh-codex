@@ -10,7 +10,11 @@ import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPT = "你好，DSHX PTY resize"
-PROMPT_TAIL = "DSHX PTY resize"
+# Ratatui redraws a line with cursor-addressing writes. On some terminals/runners,
+# the visible prompt can therefore arrive as multiple printable spans separated by
+# ANSI cursor moves rather than one contiguous raw PTY substring. Validate the
+# visible content in order without weakening the CJK/ASCII prompt contract.
+PROMPT_TOKENS = ("你", "好", "，", "DSHX", "PTY", "resize")
 EXPECTED_TUI_VERSION = os.environ.get("DSHX_VERSION", "1.0.0-ci")
 EXPECTED_MODEL_DISPLAY_NAME = "DSHX Protocol Stub"
 trace_fd, trace_name = tempfile.mkstemp(prefix="dshx-protocol-trace-", suffix=".jsonl")
@@ -48,6 +52,15 @@ def wait_for_protocol_notification(method, timeout=10):
         time.sleep(0.05)
     trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
     raise AssertionError(f"Timed out waiting for protocol notification {method!r}.\nProtocol trace:\n{trace}")
+
+
+def expect_rendered_tokens(child, tokens):
+    """Consume printable tokens in visible order while tolerating ANSI redraws between them."""
+    rendered = []
+    for token in tokens:
+        child.expect_exact(token)
+        rendered.append(child.before + child.after)
+    return "".join(rendered)
 
 
 try:
@@ -110,16 +123,18 @@ try:
             # bytes. On slower macOS runners, a fixed delay measured from write
             # completion can expire while the prompt is still queued, making
             # Enter arrive immediately after the paste-like burst is processed.
-            # Wait for the stable ASCII tail to be rendered first, then start
-            # Codex's 120 ms paste-submit guard delay.
-            child.expect(PROMPT_TAIL)
-            transcript.append(child.before + child.after)
+            # Wait until every visible CJK/ASCII prompt token has been rendered
+            # in order. Cursor-addressing escape sequences may occur between
+            # tokens, so raw contiguous-string matching is intentionally wrong.
+            transcript.append(expect_rendered_tokens(child, PROMPT_TOKENS))
             time.sleep(0.25)
             child.send("\r")
-            child.expect("DSHX protocol stub received:")
+            # "received:" is unique to the stub response, so it establishes that
+            # the submitted turn reached the TUI response path. Then verify the
+            # echoed prompt using the same rendered-token semantics as the input.
+            child.expect_exact("received:")
             transcript.append(child.before + child.after)
-            child.expect(PROMPT)
-            transcript.append(child.before + child.after)
+            transcript.append(expect_rendered_tokens(child, PROMPT_TOKENS))
         except Exception:
             transcript.append(child.before or "")
             trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
