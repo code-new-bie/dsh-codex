@@ -247,9 +247,9 @@ async function run() {
     return;
   }
 
-  let startDshxLocalServer;
+  let bootDshxPresentationRuntime;
   try {
-    ({ startDshxLocalServer } = await import('../src/dsh/local-server.mjs'));
+    ({ bootDshxPresentationRuntime } = await import('../src/dsh/runtime-boot.mjs'));
   } catch (error) {
     process.stderr.write(`dshx: failed to load official DeepSeek Harness runtime: ${error instanceof Error ? error.message : error}\n`);
     process.exitCode = 1;
@@ -282,20 +282,47 @@ async function run() {
 
   const debug = process.env.DSHX_DEBUG === '1';
   const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
-  let local;
+  let ctx;
   try {
-    local = await startDshxLocalServer({
+    // The official composition mounts the dshx-presentation Cordis plugin,
+    // which owns the bridge + adapter transport and publishes the endpoint
+    // as the `dshxPresentation` service.
+    ctx = await bootDshxPresentationRuntime({
       cwd: process.cwd(),
-      home: tuiHome,
+      presentationHome: tuiHome,
       version: VERSION,
       bridgeCommand: bridge,
-      log
+      debug
     });
   } catch (error) {
     process.stderr.write(`dshx: failed to boot DeepSeek Harness/local IPC: ${error instanceof Error ? error.message : error}\n`);
     process.exitCode = 1;
     return;
   }
+  const presentation = ctx.get('dshxPresentation');
+  if (!presentation || typeof presentation.close !== 'function') {
+    process.stderr.write('dshx: presentation composition mounted without the dshxPresentation service\n');
+    try { await ctx.dispose?.(); } catch { /* primary failure already reported */ }
+    process.exitCode = 1;
+    return;
+  }
+
+  // Transport teardown first, then the official root Fiber (which unwinds the
+  // plugin whose disposer re-enters the memoized transport close as a no-op).
+  const closePresentation = async () => {
+    let primaryError;
+    try {
+      await presentation.close();
+    } catch (error) {
+      primaryError = error;
+    }
+    try {
+      await ctx.dispose?.();
+    } catch (error) {
+      primaryError ??= error;
+    }
+    if (primaryError) throw primaryError;
+  };
 
   let child;
   try {
@@ -307,7 +334,7 @@ async function run() {
         // component only and must not read/write the user's ordinary Codex state.
         CODEX_HOME: tuiHome,
         ...invocation.resumeEnv,
-        DSHX_APP_SERVER_ENDPOINT: local.url
+        DSHX_APP_SERVER_ENDPOINT: presentation.url
       },
       stdio: 'inherit',
       windowsHide: false
@@ -315,7 +342,7 @@ async function run() {
   } catch (error) {
     process.stderr.write(`dshx: failed to launch pinned Codex TUI: ${error instanceof Error ? error.message : error}\n`);
     try {
-      await local.close();
+      await closePresentation();
     } catch (cleanupError) {
       if (debug) process.stderr.write(`[dshx] startup cleanup: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}\n`);
     }
@@ -328,7 +355,7 @@ async function run() {
     if (closing) return;
     closing = true;
     try {
-      await local.close();
+      await closePresentation();
     } catch (error) {
       process.stderr.write(`dshx: shutdown cleanup failed: ${error instanceof Error ? error.message : error}\n`);
       if (exitCode === 0) exitCode = 1;

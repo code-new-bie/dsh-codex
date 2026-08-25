@@ -191,7 +191,8 @@ export async function startDshxLocalServer({
   bridgeCommand = packagedBridgeBinary(),
   bridgeArgs,
   spawnBridge = spawn,
-  socketRoot
+  socketRoot,
+  disposeRuntimeOnClose = true
 } = {}) {
   const rendezvousRoot = path.resolve(socketRoot ?? defaultSocketRoot({ home }));
   let socketDirectory;
@@ -320,10 +321,15 @@ export async function startDshxLocalServer({
         capture('bridge cleanup failed', error);
       }
 
-      try {
-        await ctx?.dispose?.();
-      } catch (error) {
-        capture('DSH dispose failed', error);
+      // When mounted as the dshx-presentation Cordis plugin, root-fiber
+      // disposal stays owned by the composition; only the transport closes
+      // here and the Fiber unwinds the plugin afterwards.
+      if (disposeRuntimeOnClose) {
+        try {
+          await ctx?.dispose?.();
+        } catch (error) {
+          capture('DSH dispose failed', error);
+        }
       }
 
       if (socketDirectory) {

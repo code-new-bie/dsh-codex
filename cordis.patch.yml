@@ -1,0 +1,19 @@
+# The DSHX surface bundle patch, riding over the official DSH headless
+# profile. Loaded through DSH's own optional-patch loader by
+# src/dsh/runtime-boot.mjs, after the profile bundle layers and both
+# user-owned patch layers.
+#
+# Only the competing presentation rows are locked off; every runtime
+# capability row remains user-authoritative. The presentation runner itself
+# mounts in-process through bootDshxPresentationRuntime() using the Cordis
+# dynamic plugin API (see src/dsh/presentation-plugin.mjs). Once this package
+# resolves from a profile node_modules under its scoped npm name, the
+# documented insert row below becomes the canonical declaration:
+#
+# - insert:
+#     - id: dshx-presentation
+#       name: '@code-new-bie/dshx-tui/presentation'
+- id: headless-startup
+  disabled: true
+- id: headless-runner
+  disabled: true
