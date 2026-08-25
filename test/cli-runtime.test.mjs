@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DSHX_DOCTOR_BOOT_TIMEOUT_MS,
+  DSHX_DOCTOR_DISPOSE_TIMEOUT_MS,
   DSHX_NODE_ENGINE,
   DSHX_RELEASE_NODE_MAJOR,
   assertReleaseNodeVersion,
@@ -24,4 +26,10 @@ test('release/freeze work is intentionally standardized on Node 24 LTS', () => {
   assert.doesNotThrow(() => assertReleaseNodeVersion('24.19.0'));
   assert.throws(() => assertReleaseNodeVersion('22.23.0'), /requires Node 24\.x/);
   assert.throws(() => assertReleaseNodeVersion('26.3.0'), /requires Node 24\.x/);
+});
+
+test('doctor permits realistic first-run DSH cold starts while remaining bounded', () => {
+  assert.equal(DSHX_DOCTOR_BOOT_TIMEOUT_MS, 60_000);
+  assert.equal(DSHX_DOCTOR_DISPOSE_TIMEOUT_MS, 10_000);
+  assert.ok(DSHX_DOCTOR_BOOT_TIMEOUT_MS > 20_000);
 });
