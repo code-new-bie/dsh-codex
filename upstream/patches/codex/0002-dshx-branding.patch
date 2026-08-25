@@ -1,0 +1,38 @@
+diff --git a/codex-rs/tui/src/history_cell/session.rs b/codex-rs/tui/src/history_cell/session.rs
+--- a/codex-rs/tui/src/history_cell/session.rs
++++ b/codex-rs/tui/src/history_cell/session.rs
+@@ -142,7 +142,7 @@ pub(crate) fn new_session_info(
+             Line::from(vec![
+                 "  ".into(),
+                 "/init".into(),
+-                " - create an AGENTS.md file with instructions for Codex".dim(),
++                " - create an AGENTS.md file with instructions for DeepSeek Harness".dim(),
+             ]),
+@@ -152,7 +152,7 @@ pub(crate) fn new_session_info(
+             Line::from(vec![
+                 "  ".into(),
+                 "/permissions".into(),
+-                " - choose what Codex is allowed to do".dim(),
++                " - choose what DeepSeek Harness is allowed to do".dim(),
+             ]),
+@@ -269,10 +269,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
+         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
+ 
+-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
++        // DSHX changes branding only; layout and interaction stay upstream Codex.
+         let title_spans: Vec<Span<'static>> = vec![
+             Span::from(">_ ").dim(),
+-            Span::from("OpenAI Codex").bold(),
++            Span::from("DeepSeek Harness").bold(),
+             Span::from(" ").dim(),
+             Span::from(format!("(v{})", self.version)).dim(),
+         ];
+@@ -335,7 +335,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
+ 
+     fn raw_lines(&self) -> Vec<Line<'static>> {
+         let mut lines = vec![
+-            Line::from(format!("OpenAI Codex (v{})", self.version)),
++            Line::from(format!("DeepSeek Harness (v{})", self.version)),
+             Line::from(format!(
+                 "model: {}{}",
+                 self.model,

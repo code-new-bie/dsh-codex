@@ -2,94 +2,117 @@
 
 ## Objective
 
-`dsh-codex` should preserve the Codex terminal interaction model while replacing the Codex agent backend with DeepSeek Harness.
+DSHX is a terminal frontend for official DeepSeek Harness. Its purpose is to preserve the pinned Codex terminal interaction model while projecting DSH public runtime state into that UI.
 
-## Ownership boundary
+It is **not** a fork of DeepSeek Harness and must not grow into an agent framework.
+
+## Normative ownership boundary
 
 | Concern | Owner |
 |---|---|
-| Terminal layout / composer / keyboard / overlays | Codex TUI thin fork |
-| Session persistence | DSH |
-| Agent loop | DSH |
-| Model routing | DSH |
-| Tool registry and execution | DSH |
-| Sandbox and approval policy | DSH |
-| Skills / subagents / jobs | DSH |
-| Protocol translation | dsh-codex adapter |
+| Terminal layout / composer / keyboard / overlays | DSHX / Codex TUI thin fork |
+| UX parity and branding | DSHX |
+| `dshx` launcher / packaging | DSHX |
+| Public API/event → TUI protocol projection | DSHX thin adapter |
+| Session persistence | DeepSeek Harness upstream |
+| Agent loop | DeepSeek Harness upstream |
+| Model routing | DeepSeek Harness upstream |
+| Tool registry and execution | DeepSeek Harness upstream |
+| Sandbox and approval policy | DeepSeek Harness upstream |
+| Skills / subagents / plugins / jobs | DeepSeek Harness upstream |
 
-The TUI must never become a second source of truth for session history, tool policy, model configuration or agent state.
+The adapter may translate and cache disposable presentation state. It must never become a second source of truth for session history, policy, model configuration, tools or agent state.
+
+If a DSH capability is unavailable or cannot be represented safely, DSHX must disable, hide or explicitly mark the corresponding UI unsupported. It must **not** implement the missing runtime capability.
 
 ## Target topology
 
 ```text
 ┌─────────────────────────────────────┐
-│ Codex TUI thin fork                 │
+│ Codex TUI thin fork                 │  project-owned presentation
 │                                     │
 │ welcome / composer / cells / diff   │
 │ slash commands / pickers / footer   │
 └──────────────────┬──────────────────┘
                    │
-          app-server-compatible API
+          app-server-compatible view
                    │
 ┌──────────────────▼──────────────────┐
-│ dsh-codex protocol adapter          │
+│ dsh-codex thin adapter              │  project-owned translation
 │                                     │
-│ Thread ↔ Session                    │
-│ Turn   ↔ Agent turn                 │
-│ Item   ↔ DSH event/tool projection  │
+│ Thread ↔ Session id/projection      │
+│ Turn   ↔ DSH turn lifecycle         │
+│ Item   ↔ exposed DSH events         │
 └──────────────────┬──────────────────┘
-                   │ Cordis
+═══════════════════╪════════════════════ ownership boundary
+                   │ official public APIs/events
 ┌──────────────────▼──────────────────┐
-│ DeepSeek Harness                    │
+│ DeepSeek Harness                    │  upstream-owned runtime
 │                                     │
 │ agents / sessions / llm / tools     │
-│ sandbox / approvals / skills        │
+│ sandbox / approvals / skills / ...  │
 └─────────────────────────────────────┘
 ```
 
 ## Protocol mapping
 
-The adapter starts with a deliberately small vertical slice.
+Mappings are UI projections, not replacement implementations.
 
-| Codex concept | DSH concept |
+| Codex concept | DSH source |
 |---|---|
-| Thread | Session |
-| `thread/start` | create DSH Session + Agent |
-| `thread/resume` | inspect and resume DSH Session |
-| `thread/list` | DSH session catalog |
-| Turn | one user interaction with a DSH Agent |
-| agent-message delta | model/agent streaming event |
-| command execution item | DSH shell/tool event |
-| file-change item | DSH filesystem/editor event |
-| approval request | DSH approval request |
-| user-input request | DSH ask-user request |
-| plan update | DSH plan/todo projection |
-| turn interrupt | DSH turn cancellation |
+| Thread | DSH Session identity and exposed metadata |
+| `thread/start` | official DSH Session/Agent creation API |
+| `thread/resume` | official DSH Session inspection/resume API |
+| `thread/list` | official DSH session catalog |
+| Turn | official DSH user-interaction lifecycle |
+| agent-message delta | exposed DSH agent/model streaming event |
+| command execution item | exposed DSH tool/shell event |
+| file-change item | exposed DSH filesystem/editor event |
+| approval request | official DSH approval request |
+| user-input request | official DSH ask-user request |
+| plan update | exposed DSH plan/todo state |
+| turn interrupt | official DSH cancellation/control API |
+
+Where no official mapping exists, the adapter reports unsupported instead of synthesizing a shadow capability.
 
 ## Session invariants
 
-1. DSH session IDs are authoritative.
-2. Resume reads model/provider/reasoning configuration from persisted DSH session events where available.
-3. The TUI may cache presentation state, but it must be disposable.
-4. No Codex session database is used for DSH conversations.
+1. DSH session IDs and persisted events are authoritative.
+2. DSHX does not keep a parallel conversation database.
+3. Resume obtains model/provider/reasoning state from DSH through supported interfaces; the TUI does not invent replacements.
+4. TUI caches are disposable and reconstructable.
+5. DSHX never changes permission semantics to make a Codex widget easier to reuse.
 
-## Upstream strategy
+## Codex upstream strategy
 
-The Codex TUI fork should be pinned to a known upstream commit. Upstream changes are integrated as explicit sync commits. Product-specific modifications should live behind narrow traits/interfaces whenever practical.
+The TUI is pinned to a known `openai/codex` commit. Upstream changes are integrated as explicit sync commits. Project-specific changes should live behind narrow extension points so rendering/input code remains close to upstream.
 
-The desired long-term diff is:
+Desired long-term diff:
 
 ```text
 Codex TUI upstream     95%+ unchanged
-DSH adapter            project-owned
+DSH UI adapter         project-owned and thin
 Branding               minimal patch
-DSH-specific commands  isolated extension points
+DSH-specific UI        isolated extension points only
 ```
 
 ## Runtime transport
 
-Development may use Codex remote/app-server modes to validate mapping quickly. A production release should use a local production-grade transport (same process, stdio, or local socket) and must not depend on an upstream transport explicitly documented as experimental.
+M0 may use Codex remote/app-server WebSocket mode strictly as a development protocol harness. It is not an accepted production dependency.
+
+Production `dshx` must hide transport/runtime orchestration from the user and use a local supported integration path (for example in-process, stdio or a production-grade local socket) consistent with the pinned TUI architecture.
+
+## Launcher contract
+
+Production 1.0 must support:
+
+```bash
+cd <project>
+dshx
+```
+
+The user must not need to invoke `codex --remote`, a bridge script, package-manager commands or DSH profile plumbing for normal startup.
 
 ## Security model
 
-The UI renders approval decisions; DSH enforces them. The adapter must not silently upgrade permissions. Any translation that cannot faithfully represent a DSH permission request must fail closed and surface an explicit unsupported-policy message.
+The TUI renders approval decisions; DSH enforces them. Translation must never silently upgrade privileges. If the current Codex UI/protocol cannot faithfully represent a DSH permission request, DSHX fails closed and surfaces an explicit incompatibility.

@@ -1,59 +1,88 @@
 # Roadmap
 
-## Milestone 0 — Protocol proof
+All milestones obey one ownership rule: **DSHX maintains the TUI, launcher, transport and thin public-API adapter only. DeepSeek Harness capabilities remain upstream-owned.**
 
-Goal: prove that an unmodified or minimally modified Codex TUI can render a DSH-backed conversation.
+Milestone status describes implementation progress. A 1.0 release requires the independent evidence in `RELEASE-READINESS.md`.
 
-- Pin a Codex upstream commit.
-- Implement initialize / thread start / turn start / agent-message streaming.
-- Map one DSH read/search tool event into a Codex item.
-- Support interrupt.
-- Run on Windows Terminal and Linux.
+## Milestone 0 — Codex TUI protocol proof — complete
 
-Exit gate: `input → DSH → tool → streaming answer` works end to end in the Codex TUI.
+Goal: prove that the pinned Codex TUI can be driven without Codex's agent runtime.
 
-## Milestone 1 — Daily coding loop
+Delivered:
 
-- Session resume/list.
-- Shell command cells.
-- File change + unified diff.
-- Approval requests.
-- Ask-user prompts.
-- Steering during an active turn.
-- Model picker backed by DSH model registry.
-- Context/token footer.
-- Reliable Ctrl+C behavior.
+- pinned Codex and DSH upstream references;
+- deterministic app-server-compatible development stub;
+- bootstrap/thread/turn/streaming/interrupt protocol proof;
+- zero-argument development launcher;
+- thin-fork patches proving the Codex TUI can run with DSHX as its backend.
 
-Exit gate: the CLI can be used for a full coding task without falling back to DSH WebUI.
+The historical TCP/WebSocket path is retained only as a development fixture and is excluded from the production package.
 
-## Milestone 2 — UX parity
+## Milestone 1 — Official DSH public-API adapter / daily coding loop — implementation complete, RC evidence pending
 
-- Welcome screen parity.
-- Slash command palette parity.
-- `/model`, `/permissions`, `/status`, `/review` behavior parity where concepts map cleanly.
-- Resume picker parity.
-- Plan/reasoning cells.
-- Scroll/search/mouse/resize behavior.
-- Windows Terminal and CJK/IME regression tests.
+Delivered through official DSH public APIs/events:
 
-Exit gate: side-by-side comparison with the pinned Codex release passes the UX parity matrix.
+- session start/resume/list/history projection;
+- response + reasoning streaming;
+- specialized shell/tool/file/diff presentation where DSH exposes faithful semantics;
+- approval and ask-user presentation with DSH policy authoritative;
+- steering and Ctrl+C interrupt;
+- model/provider/reasoning picker backed by official DSH registry/resolution;
+- context/token/footer projection where DSH exposes the data;
+- skills discovery;
+- fork, compaction and subagent boundaries delegated to DSH-owned services;
+- fail-closed ownership tests preventing local execution/runtime duplication.
 
-## Milestone 3 — DSH-native capabilities
+Exit gate: the exact release candidate must pass the automated daily-loop/PTY gates and real dogfooding; implementation alone does not declare the milestone release-green.
 
-- Skills.
-- Subagents.
-- Jobs/workflows.
-- DSH-specific command namespace without disturbing Codex-compatible commands.
-- Plugin diagnostics and configuration surface.
+## Milestone 2 — Codex UX parity — thin-fork parity implemented; manual terminal acceptance pending
 
-## Milestone 4 — Production 1.0
+Implemented/inherited from the pinned Codex TUI:
 
-- Versioned protocol compatibility contract.
-- Crash recovery and session durability tests.
-- Security/approval fail-closed tests.
-- Windows/Linux/macOS release artifacts.
-- Reproducible CI builds and checksums.
-- Upstream sync playbook.
-- Release candidate dogfooding gate.
+- welcome screen, composer and slash-command interaction;
+- model and permission pickers;
+- resume picker using DSH session data;
+- approval and ask-user overlays;
+- tool/shell/diff/plan/reasoning cells;
+- steering/interrupt behavior;
+- Codex-native scroll, mouse and resize behavior;
+- status/footer rendering where DSH exposes data.
 
-1.0 is released only when the daily coding loop and UX parity matrix are both green on supported platforms.
+Unsupported Codex runtime semantics are explicitly hidden/rejected rather than silently emulated. See `DSH-CAPABILITY-MATRIX.md`.
+
+Exit gate still pending: side-by-side Windows Terminal + Chinese IME/CJK acceptance against the pinned Codex TUI using the exact generated release-candidate artifact.
+
+## Milestone 3 — Additional DSH capability surfaces (presentation only) — partial
+
+Implemented where official seams are stable:
+
+- Skills discovery/UI feed.
+- Subagent thread/status presentation and DSH-owned interruption authority.
+
+Future presentation-only candidates:
+
+- Jobs/workflows UI.
+- Plugin diagnostics/configuration UI where DSH exposes a stable product-facing seam.
+- Additional DSH-specific commands that do not disturb Codex-compatible commands.
+
+This milestone is not a blocker for the core 1.0 daily coding loop unless a listed capability is required by the final product acceptance matrix.
+
+## Milestone 4 — Production packaging and 1.0 gate — implementation complete, external validation pending
+
+Implemented:
+
+- `dshx` zero-argument startup with no manual bridge/profile/remote command;
+- pinned Codex TUI included in platform release artifacts;
+- packaged cross-platform `dshx-ipc-bridge` using Codex `codex_uds`;
+- production Unix-socket transport with no TCP listener / bearer-token loopback dependency;
+- real local-IPC data-plane self-check in `dshx doctor`;
+- exact supported DSH release closure and compatibility gates;
+- DSH-owned session durability/resume projection tests;
+- approval/permission/subagent fail-closed tests;
+- Linux x64, Windows x64, macOS arm64 and macOS x64 release jobs;
+- clean-install artifact smoke and SHA-256 checksums;
+- Linux real pinned-TUI PTY smoke in CI **and tagged release workflow**;
+- Codex/DSH pin + patch-queue sync model;
+- explicit RC promotion checklist in `RELEASE-READINESS.md`.
+
+1.0 may ship only when the exact candidate has green CI/release evidence and the manual Windows Terminal/CJK/IME UX acceptance is recorded as passing.

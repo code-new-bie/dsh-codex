@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
+
+jobs:
+  build:
+    name: Build / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: windows-latest
+            label: windows-x64
+          - os: macos-26
+            label: macos-arm64
+          - os: macos-26-intel
+            label: macos-x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Enforce release tag lineage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" == v1.0.0-rc.* ]]; then
+            expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/release/1.0-rc" --jq .object.sha)"
+            source_ref='release/1.0-rc'
+          else
+            expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            source_ref='main'
+          fi
+          if [[ "$GITHUB_SHA" != "$expected" ]]; then
+            echo "release tag $GITHUB_REF_NAME must point at the current $source_ref head: expected=$expected actual=$GITHUB_SHA" >&2
+            exit 1
+          fi
+      - name: Enforce stable 1.0 promotion ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "v1.0.0" ]]; then
+            exit 0
+          fi
+          for issue in 12 13 14 15; do
+            state="$(gh issue view "$issue" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+            if [[ "$state" != "CLOSED" ]]; then
+              echo "stable 1.0 is blocked: release-gate issue #$issue is $state" >&2
+              exit 1
+            fi
+          done
+          merged="$(gh pr view 11 --repo "$GITHUB_REPOSITORY" --json mergedAt --jq '.mergedAt != null')"
+          if [[ "$merged" != "true" ]]; then
+            echo 'stable 1.0 is blocked: PR #11 has not been merged' >&2
+            exit 1
+          fi
+      - name: Resolve release version (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "DSHX_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Resolve release version (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "DSHX_VERSION=$($env:GITHUB_REF_NAME.TrimStart('v'))"
+      - name: Test presentation adapter from frozen graph
+        run: |
+          npm ci --include=optional --ignore-scripts=false
+          node scripts/verify-dsh-closure.mjs
+          npm test
+      - name: Boot official DSH runtime
+        run: node scripts/runtime-smoke.mjs
+      - name: Build pinned TUI and local IPC bridge (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/build-codex-tui.sh
+      - name: Build pinned TUI and local IPC bridge (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-codex-tui.ps1
+      - name: Verify local IPC data plane (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: dist/bin/dshx-ipc-bridge --check
+      - name: Verify local IPC data plane (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\dist\bin\dshx-ipc-bridge.exe --check
+          if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
+      - name: Real pinned TUI local-IPC PTY + CJK + resize smoke
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/dshx-pty-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
+          "$VENV/bin/python" test/tui_smoke.py
+      - name: Real pinned TUI Windows ConPTY + CJK local-IPC smoke
+        if: runner.os == 'Windows'
+        run: node test/tui_smoke_windows.mjs
+      - name: Build installable platform tarball (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: node scripts/package-platform.mjs
+      - name: Build installable platform tarball (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/package-platform.mjs
+      - name: Clean install smoke (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
+          PREFIX="$RUNNER_TEMP/dshx-release-smoke"
+          npm install --global --prefix "$PREFIX" --include=optional --ignore-scripts=false "$TGZ"
+          "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
+          "$PREFIX/bin/dshx" doctor
+      - name: Clean install smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tgz = Get-ChildItem dist\release\dshx-*.tgz | Select-Object -First 1
+          if (-not $tgz) { throw 'platform tarball missing' }
+          $prefix = Join-Path $env:RUNNER_TEMP 'dshx-release-smoke'
+          npm install --global --prefix $prefix --include=optional --ignore-scripts=false $tgz.FullName
+          $version = & (Join-Path $prefix 'dshx.cmd') --version
+          if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
+          & (Join-Path $prefix 'dshx.cmd') doctor
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dshx-${{ matrix.label }}
+          path: |
+            dist/release/*.tgz
+            dist/release/*.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Verify cross-platform artifact provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+
+          files = sorted(glob.glob('artifacts/dshx-*.tgz.json'))
+          if len(files) != 4:
+              raise SystemExit(f'expected 4 platform provenance sidecars, found {len(files)}: {files}')
+          records = []
+          for filename in files:
+              with open(filename, encoding='utf-8') as handle:
+                  records.append((filename, json.load(handle)))
+          expected_version = os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          keys = ('version', 'dshVersion', 'codexCommit', 'dshCommit', 'transport', 'dependencyGraph', 'sourceLockSha256')
+          baseline = {key: records[0][1].get(key) for key in keys}
+          if baseline['version'] != expected_version:
+              raise SystemExit(f"artifact version mismatch: expected {expected_version}, got {baseline['version']}")
+          if baseline['dependencyGraph'] != 'source-package-lock':
+              raise SystemExit(f"unexpected dependency graph provenance: {baseline['dependencyGraph']}")
+          lock_hash = baseline['sourceLockSha256']
+          if not isinstance(lock_hash, str) or len(lock_hash) != 64 or any(ch not in '0123456789abcdef' for ch in lock_hash):
+              raise SystemExit(f'invalid source lock SHA-256: {lock_hash!r}')
+          for filename, record in records[1:]:
+              current = {key: record.get(key) for key in keys}
+              if current != baseline:
+                  raise SystemExit(f'cross-platform provenance mismatch in {filename}: {current} != {baseline}')
+          print(json.dumps(baseline, sort_keys=True))
+          PY
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum dshx-*.tgz dshx-*.tgz.json > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(--verify-tag --generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" "${flags[@]}"

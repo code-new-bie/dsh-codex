@@ -1,0 +1,46 @@
+diff --git a/codex-rs/tui/src/app_server_session.rs b/codex-rs/tui/src/app_server_session.rs
+--- a/codex-rs/tui/src/app_server_session.rs
++++ b/codex-rs/tui/src/app_server_session.rs
+@@ -1660,6 +1660,18 @@ fn thread_start_params_from_config(
+     remote_cwd_override: Option<&std::path::Path>,
+     session_start_source: Option<ThreadStartSource>,
+ ) -> ThreadStartParams {
++    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++        return ThreadStartParams {
++            cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
++            ephemeral: Some(config.ephemeral),
++            history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
++            session_start_source,
++            thread_source: Some(ThreadSource::User),
++            ..ThreadStartParams::default()
++        };
++    }
+     let permissions = permissions_selection_from_config(config, thread_params_mode);
+     let sandbox = permissions
+         .is_none()
+@@ -1703,6 +1715,12 @@ fn thread_resume_params_from_config(
+     remote_cwd_override: Option<&std::path::Path>,
+     model_settings: ResumeModelSettings,
+ ) -> ThreadResumeParams {
++    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++        return ThreadResumeParams {
++            thread_id: thread_id.to_string(),
++            ..ThreadResumeParams::default()
++        };
++    }
+     if model_settings == ResumeModelSettings::PreserveExistingThread {
+         return ThreadResumeParams {
+             thread_id: thread_id.to_string(),
+@@ -1755,6 +1773,12 @@ fn thread_fork_params_from_config(
+     thread_params_mode: ThreadParamsMode,
+     remote_cwd_override: Option<&std::path::Path>,
+ ) -> ThreadForkParams {
++    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++        return ThreadForkParams {
++            thread_id: thread_id.to_string(),
++            ..ThreadForkParams::default()
++        };
++    }
+     let permissions = permissions_selection_from_config(&config, thread_params_mode);
+     let sandbox = permissions
+         .is_none()

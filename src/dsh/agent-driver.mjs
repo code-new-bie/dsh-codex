@@ -1,0 +1,213 @@
+import { randomUUID } from 'node:crypto';
+import { installModelSelection } from '@deepseek-ai/dsh-agent';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { SessionId } from '@deepseek-ai/dsh-session';
+
+function requireService(ctx, name) {
+  const service = ctx.get(name);
+  if (service === undefined) throw new Error(`DSHX requires DSH service: ${name}`);
+  return service;
+}
+
+function userMessage(content) {
+  const blocks = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }];
+  return createUserMessage({
+    source: { kind: 'user' },
+    content: blocks
+  });
+}
+
+/** Thin delegation layer over official DeepSeek Harness public services. */
+export class DshAgentDriver {
+  constructor(ctx) {
+    if (!ctx || typeof ctx.get !== 'function') throw new Error('DshAgentDriver requires a Cordis Context');
+    this.ctx = ctx;
+    this.selections = new WeakMap();
+    this.externalSelections = new WeakMap();
+  }
+
+  async settleComposition() {
+    await this.ctx.get('loader')?.await?.();
+  }
+
+  persistedSelection(agent) {
+    const logged = agent.session.requestHeader?.()?.config;
+    if (logged === undefined) return undefined;
+    return {
+      provider: logged.provider,
+      model: logged.model,
+      ...(logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort })
+    };
+  }
+
+  restoredSelection(agent) {
+    return this.persistedSelection(agent)
+      ?? requireService(this.ctx, 'agentDefaultModel').currentSelection();
+  }
+
+  selectionFor(agent) {
+    const existing = this.selections.get(agent);
+    if (existing) return existing;
+    if (this.externalSelections.has(agent)) {
+      throw new Error('DSHX must not install a second model-selection listener on a Host-owned Agent');
+    }
+    const driver = this;
+    let picked = this.persistedSelection(agent);
+    const selection = {
+      get current() {
+        return picked
+          ?? requireService(driver.ctx, 'agentDefaultModel').currentSelection();
+      },
+      set current(next) { picked = next; },
+      assembled: undefined
+    };
+    installModelSelection(agent.ctx, selection);
+    this.selections.set(agent, selection);
+    return selection;
+  }
+
+  /**
+   * Attach presentation state to an Agent created by another official DSH
+   * entrypoint (currently Host sessions.fork). No routing listener is installed;
+   * writes must go back through the owning DSH API delegate.
+   */
+  adoptExternalSelection(agent, { current, select } = {}) {
+    if (this.selections.has(agent)) {
+      throw new Error('Cannot adopt Host-owned selection after DSHX installed its own selection listener');
+    }
+    const state = {
+      current: current ?? this.restoredSelection(agent),
+      select
+    };
+    this.externalSelections.set(agent, state);
+    return state.current;
+  }
+
+  installSelection(agentCtx) {
+    const agent = agentCtx.agent;
+    if (!agent) throw new Error('DSHX agent setup has no scoped DSH Agent');
+    this.selectionFor(agent);
+  }
+
+  async create({ cwd = process.cwd(), sessionId = `session-${randomUUID()}` } = {}) {
+    await this.settleComposition();
+    const agents = requireService(this.ctx, 'agents');
+    const selection = requireService(this.ctx, 'agentDefaultModel').currentSelection();
+    return agents.create({
+      sessionId: SessionId(sessionId),
+      meta: { cwd },
+      agentOptions: { provider: selection.provider, model: selection.model },
+      setup: (agentCtx) => this.installSelection(agentCtx)
+    });
+  }
+
+  async resume(sessionId) {
+    await this.settleComposition();
+    const agents = requireService(this.ctx, 'agents');
+    return agents.resume({
+      resumeSessionId: SessionId(sessionId),
+      setup: (agentCtx) => this.installSelection(agentCtx)
+    });
+  }
+
+  currentModel(agent) {
+    return this.externalSelections.get(agent)?.current ?? this.selectionFor(agent).current;
+  }
+
+  currentTitle(agent) {
+    return this.ctx.get('sessionTitle')?.get?.(agent.session);
+  }
+
+  renameTitle(agent, title) {
+    const service = requireService(this.ctx, 'sessionTitle');
+    return service.rename(agent.session, title);
+  }
+
+  async readTitle(sessionId) {
+    const query = this.ctx.get('sessionQuery');
+    if (query?.readTitle) return query.readTitle(SessionId(sessionId));
+    const live = this.getLive(sessionId);
+    return live ? this.currentTitle(live) : undefined;
+  }
+
+  async selectModel(agent, requested) {
+    const llm = requireService(this.ctx, 'llm');
+    const resolved = await llm.resolveCallConfig({
+      provider: requested.provider,
+      model: requested.model,
+      ...(requested.reasoningEffort === undefined ? {} : { reasoningEffort: requested.reasoningEffort })
+    });
+    const selected = {
+      provider: resolved.provider,
+      model: resolved.model,
+      ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort })
+    };
+    const external = this.externalSelections.get(agent);
+    if (external) {
+      if (typeof external.select !== 'function') {
+        throw new Error('Host-owned DSH Agent has no model-selection delegate');
+      }
+      const committed = await external.select(selected);
+      external.current = committed ?? selected;
+      return external.current;
+    }
+    this.selectionFor(agent).current = selected;
+    return selected;
+  }
+
+  async modelDirectory() {
+    const llm = requireService(this.ctx, 'llm');
+    const providers = llm.listProviders();
+    const settled = await Promise.all(providers.map(async (provider) => {
+      try {
+        const models = await llm.listModels(provider.id);
+        const entries = await Promise.all(models.map(async (model) => {
+          const exact = await llm.resolveModelInfo(provider.id, model.id);
+          return {
+            id: model.id,
+            name: model.name,
+            ...(model.description === undefined ? {} : { description: model.description }),
+            ...(exact.inputModalities === undefined ? {} : { inputModalities: [...exact.inputModalities] }),
+            ...(exact.context === undefined ? {} : { contextWindow: exact.context.contextWindow }),
+            ...(exact.reasoning === undefined ? {} : {
+              reasoning: {
+                efforts: exact.reasoning.efforts.map((effort) => ({
+                  id: effort.id,
+                  name: effort.name,
+                  ...(effort.description === undefined ? {} : { description: effort.description })
+                })),
+                ...(exact.reasoning.defaultEffort === undefined ? {} : { defaultEffort: exact.reasoning.defaultEffort })
+              }
+            })
+          };
+        }));
+        return { ok: true, group: { provider: provider.id, name: provider.name ?? provider.id, models: entries } };
+      } catch (error) {
+        return {
+          ok: false,
+          failure: { provider: provider.id, message: error instanceof Error ? error.message : String(error) }
+        };
+      }
+    }));
+    return {
+      groups: settled.filter((entry) => entry.ok && entry.group.models.length > 0).map((entry) => entry.group),
+      failures: settled.filter((entry) => !entry.ok).map((entry) => entry.failure)
+    };
+  }
+
+  followup(agent, content) { agent.followup(userMessage(content)); }
+  steer(agent, content) { agent.steer(userMessage(content)); }
+  interrupt(agent, { keepInbox = false } = {}) { agent.cancel({ kind: 'user' }, { keepInbox }); }
+  whenIdle(agent) { return agent.whenIdle(); }
+  getLive(sessionId) { return requireService(this.ctx, 'agents').get(SessionId(sessionId)); }
+  listLive() { return requireService(this.ctx, 'agents').list(); }
+  listRootAgents() { return requireService(this.ctx, 'agents').roots(); }
+
+  async listSessions(signal) {
+    return requireService(this.ctx, 'sessionPersistence').list(signal);
+  }
+
+  async inspectSession(sessionId, signal) {
+    return requireService(this.ctx, 'sessionPersistence').inspect(SessionId(sessionId), signal);
+  }
+}
