@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxProductAdapter } from '../src/dsh/product-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
 
 function sourceAgent() {
   return {
@@ -16,7 +16,7 @@ function sourceAgent() {
 }
 
 function adapterFixture({ cold = false } = {}) {
-  const adapter = Object.create(DshxProductAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.controllers = new Map();
   adapter.send = () => {};
   const source = sourceAgent();

@@ -9,3 +9,5 @@ coverage/
 !.env.example
 .vscode/
 .idea/
+.build/
+.upstream/

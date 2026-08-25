@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { DshxProductAdapter } from '../src/dsh/product-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
 
 function bareAdapter() {
-  const adapter = Object.create(DshxProductAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.cwd = path.resolve('/workspace');
   adapter.diagnostics = () => {};
   adapter.controllers = new Map();

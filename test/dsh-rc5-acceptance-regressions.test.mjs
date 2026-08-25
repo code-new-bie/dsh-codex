@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { encodeDshModel } from '../src/dsh/codex-shapes.mjs';
-import { DshxReleaseAdapter } from '../src/dsh/release-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
 
 test('thread/loaded/list returns thread ids rather than thread maps', () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.driver = {
     listLive() { return [{ id: 'root-1' }, { id: 'child-2' }]; }
   };
@@ -16,7 +16,7 @@ test('thread/loaded/list returns thread ids rather than thread maps', () => {
 test('config/batchWrite delegates model defaults to official DSH persistence', async () => {
   const saved = [];
   const resolved = [];
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.home = '/tmp/dshx-presentation';
   adapter.ctx = {
     get(name) {
@@ -61,7 +61,7 @@ test('config/batchWrite delegates model defaults to official DSH persistence', a
 });
 
 test('rich user turn strips Codex null effort before the DSH-owned base path', async () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   const agent = { session: { header: { origin: 'user' } } };
   adapter.controllers = new Map([['thread-1', {
     agent,
@@ -69,29 +69,25 @@ test('rich user turn strips Codex null effort before the DSH-owned base path', a
   }]]);
   adapter.ctx = { get() { return undefined; } };
 
-  const product = Object.getPrototypeOf(DshxReleaseAdapter.prototype);
-  const originalDispatch = product.dispatch;
+  // The flattened richUserTurn routes the DSH-owned base path directly to the
+  // most-derived turnStart; stub that seam to observe what gets forwarded.
   let forwarded;
-  product.dispatch = async (method, params) => {
-    forwarded = { method, params };
+  adapter.turnStart = async (params) => {
+    forwarded = params;
     return { result: {} };
   };
-  try {
-    await adapter.richUserTurn('turn/start', {
-      threadId: 'thread-1',
-      effort: null,
-      input: [{ type: 'text', text: 'hello', text_elements: [] }]
-    });
-  } finally {
-    product.dispatch = originalDispatch;
-  }
+  await adapter.richUserTurn('turn/start', {
+    threadId: 'thread-1',
+    effort: null,
+    input: [{ type: 'text', text: 'hello', text_elements: [] }]
+  });
 
-  assert.equal(forwarded.method, 'turn/start');
-  assert.equal(forwarded.params.effort, undefined);
+  assert.equal(forwarded.effort, undefined);
+  assert.deepEqual(forwarded.input, [{ type: 'text', text: 'hello' }]);
 });
 
 test('config/batchWrite fails closed on Codex-owned settings', async () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.home = '/tmp/dshx-presentation';
   adapter.ctx = { get() { return undefined; } };
   await assert.rejects(

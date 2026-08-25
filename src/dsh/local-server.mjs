@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { DshxReleaseAdapter } from './release-adapter.mjs';
+import { DshxPresentationAdapter } from './presentation-adapter.mjs';
 import { bootDshxRuntime } from './runtime-boot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -186,7 +186,7 @@ export async function startDshxLocalServer({
   version = '0.1.0-dev',
   runtime,
   bootRuntime = bootDshxRuntime,
-  Adapter = DshxReleaseAdapter,
+  Adapter = DshxPresentationAdapter,
   log = () => {},
   bridgeCommand = packagedBridgeBinary(),
   bridgeArgs,

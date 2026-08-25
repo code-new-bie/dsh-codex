@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxProductAdapter } from '../src/dsh/product-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
 
 function adapterFixture() {
-  const adapter = Object.create(DshxProductAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.cwd = process.cwd();
   adapter.controllers = new Map();
   adapter.driver = { getLive() { return undefined; } };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxReleaseAdapter } from '../src/dsh/release-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
 import { foldDshSessionTitle } from '../src/dsh/thread-title.mjs';
 
 test('durable title fold is latest-wins over DSH session/title events', () => {
@@ -13,7 +13,7 @@ test('durable title fold is latest-wins over DSH session/title events', () => {
 });
 
 test('thread/name/set delegates loaded rename to DSH and notifies only after RPC response', async () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   const sent = [];
   const agent = { id: 'session-1', session: { events: [] } };
   adapter.controllers = new Map([['session-1', { agent }]]);
@@ -38,7 +38,7 @@ test('thread/name/set delegates loaded rename to DSH and notifies only after RPC
 });
 
 test('cold thread/name/set uses official DSH resume only for mutation lifetime', async () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   const agent = { id: 'session-2', session: { events: [] } };
   let disposed = 0;
   adapter.controllers = new Map();
@@ -61,7 +61,7 @@ test('cold thread/name/set uses official DSH resume only for mutation lifetime',
 });
 
 test('live thread response always carries latest DSH title', () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   const agent = {
     id: 'session-1',
     session: { events: [{ type: 'session/title', data: { title: 'Log title' } }] }
@@ -73,41 +73,37 @@ test('live thread response always carries latest DSH title', () => {
     }
   };
   adapter.permissions = { current() { return { preset: 'workspace-write' }; } };
-  Object.getPrototypeOf(DshxReleaseAdapter.prototype).threadResponse = () => {
-    throw new Error('test should stub through product prototype explicitly');
-  };
-
-  const product = Object.getPrototypeOf(DshxReleaseAdapter.prototype);
-  const original = product.threadResponse;
-  product.threadResponse = () => ({ thread: { id: 'session-1', name: null } });
+  // Stub the product-layer seam so only the release-layer title fold under
+  // test runs on top of a controlled response.
+  const originalProductLayer = DshxPresentationAdapter.prototype.threadResponseProductLayer;
+  DshxPresentationAdapter.prototype.threadResponseProductLayer = () => ({ thread: { id: 'session-1', name: null } });
   try {
     const response = adapter.threadResponse(agent);
     assert.equal(response.thread.name, 'Folded service title');
   } finally {
-    product.threadResponse = original;
+    DshxPresentationAdapter.prototype.threadResponseProductLayer = originalProductLayer;
   }
 });
 
 test('thread list and read enrich cold metadata with sessionQuery title snapshots', async () => {
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.diagnostics = () => {};
   adapter.driver = {
     async readTitle(id) { return { title: `Title ${id}` }; }
   };
-  const product = Object.getPrototypeOf(DshxReleaseAdapter.prototype);
-  const originalList = product.threadList;
-  const originalRead = product.threadRead;
-  product.threadList = async () => ({
+  const baseList = DshxPresentationAdapter.prototype.threadListBase;
+  const baseRead = DshxPresentationAdapter.prototype.threadReadBase;
+  DshxPresentationAdapter.prototype.threadListBase = async () => ({
     result: { data: [{ id: 'a', name: null }, { id: 'b', name: null }], nextCursor: null, backwardsCursor: null }
   });
-  product.threadRead = async () => ({ result: { thread: { id: 'a', name: null } } });
+  DshxPresentationAdapter.prototype.threadReadBase = async () => ({ result: { thread: { id: 'a', name: null } } });
   try {
     const listed = await adapter.threadList({});
     assert.deepEqual(listed.result.data.map((thread) => thread.name), ['Title a', 'Title b']);
     const read = await adapter.threadRead({ threadId: 'a' });
     assert.equal(read.result.thread.name, 'Title a');
   } finally {
-    product.threadList = originalList;
-    product.threadRead = originalRead;
+    DshxPresentationAdapter.prototype.threadListBase = baseList;
+    DshxPresentationAdapter.prototype.threadReadBase = baseRead;
   }
 });

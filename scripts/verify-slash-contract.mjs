@@ -72,9 +72,7 @@ for (const hidden of dshxHidden) {
 }
 
 const adapterSources = [
-  'src/dsh/app-server-adapter.mjs',
-  'src/dsh/product-adapter.mjs',
-  'src/dsh/release-adapter.mjs'
+  'src/dsh/presentation-adapter.mjs'
 ].map((relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8')).join('\n');
 for (const [command, methods] of runtimeBacked) {
   for (const method of methods) {
