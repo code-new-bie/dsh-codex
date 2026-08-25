@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { ProtocolStub, normalizeDispatchResult } from './protocol.mjs';
+import { ProtocolStub, normalizeDispatchResult } from './protocol-poc.mjs';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_EVENT_DELAY_MS = 18;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { WebSocket } from 'ws';
-import { startProtocolStubServer } from '../src/server.mjs';
+import { startProtocolStubServer } from '../devtools/stub-server.mjs';
 
 function openSocket(url) {
   return new Promise((resolve, reject) => {

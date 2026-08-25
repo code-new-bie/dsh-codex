@@ -15,7 +15,7 @@
     "test:dsh": "node --test --test-force-exit \"test/dsh-*.test.mjs\"",
     "freeze:deps": "node scripts/freeze-deps.mjs",
     "verify:release-deps": "node scripts/verify-dsh-closure.mjs . package-lock.json",
-    "stub": "node ./bin/dshx-stub-server.mjs",
+    "stub": "node ./devtools/dshx-stub-server.mjs",
     "dev": "node ./bin/dshx.mjs"
   },
   "dependencies": {

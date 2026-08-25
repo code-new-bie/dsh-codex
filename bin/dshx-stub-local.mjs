@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
-import { ProtocolStub, normalizeDispatchResult } from '../src/protocol.mjs';
+import { ProtocolStub, normalizeDispatchResult } from '../devtools/protocol-poc.mjs';
 
 const delayMs = Number(process.env.DSHX_STUB_EVENT_DELAY_MS || 18);
 const traceFile = process.env.DSHX_STUB_TRACE_FILE;
