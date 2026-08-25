@@ -6,7 +6,11 @@ import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCliInvocation } from '../src/cli/arguments.mjs';
-import { isSupportedNodeVersion } from '../src/cli/runtime.mjs';
+import {
+  DSHX_DOCTOR_BOOT_TIMEOUT_MS,
+  DSHX_DOCTOR_DISPOSE_TIMEOUT_MS,
+  isSupportedNodeVersion
+} from '../src/cli/runtime.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -112,10 +116,11 @@ async function officialRuntimeCheck(runtimeBoot, loadError) {
     // Doctor deliberately exercises the same official composition and profile
     // watcher path as production startup. This catches missing native optional
     // dependencies (for example sharp/koffi) that a static bundle-entry check
-    // cannot detect.
+    // cannot detect. The bounded timeout is intentionally generous enough for
+    // first-run Windows module/native initialization on supported hardware.
     ctx = await withTimeout(
       runtimeBoot.bootDshxRuntime({ cwd: process.cwd(), watch: true }),
-      20_000,
+      DSHX_DOCTOR_BOOT_TIMEOUT_MS,
       'official DSH composition boot'
     );
     const missing = REQUIRED_RUNTIME_SERVICES.filter((name) => ctx.get(name) == null);
@@ -127,7 +132,11 @@ async function officialRuntimeCheck(runtimeBoot, loadError) {
   } finally {
     if (ctx) {
       try {
-        await withTimeout(Promise.resolve(ctx.dispose?.()), 10_000, 'official DSH composition disposal');
+        await withTimeout(
+          Promise.resolve(ctx.dispose?.()),
+          DSHX_DOCTOR_DISPOSE_TIMEOUT_MS,
+          'official DSH composition disposal'
+        );
       } catch (error) {
         cleanupError = error;
       }
