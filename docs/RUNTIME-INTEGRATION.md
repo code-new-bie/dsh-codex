@@ -17,6 +17,7 @@ The official runtime owns Agent creation/resume, Session persistence, model sele
 ┌──────────────────────────────────────────┐
 │ dshx Node launcher                       │
 │  - boots official DSH composition        │
+│  - mounts dshx-presentation plugin row   │
 │  - owns child-process lifetime only      │
 └────────────────────┬─────────────────────┘
                      │
@@ -25,6 +26,9 @@ The official runtime owns Agent creation/resume, Session persistence, model sele
 ┌──────────────────────────────────────────┐
 │ DSHX presentation adapter                │
 │  - Codex protocol projection only        │
+│  - mounted as the dshx-presentation      │
+│    Cordis plugin (name/inject/Config/    │
+│    apply), disposed by the root Fiber    │
 └────────────────────┬─────────────────────┘
                      │ JSONL / child stdio
                      ▼
@@ -59,12 +63,12 @@ Therefore production does not depend on Codex's experimental TCP WebSocket remot
 
 1. Resolve and validate the packaged `dshx-tui` and `dshx-ipc-bridge` binaries.
 2. Create an isolated presentation-only `CODEX_HOME` under `~/.dshx/codex-tui` (or the development override).
-3. Boot the supported official DSH composition in Node.
+3. Boot the official DSH composition in Node and mount the `dshx-presentation` Cordis plugin on it; the plugin starts the local transport and publishes the endpoint as the `dshxPresentation` service. Surface locks load from the declarative `cordis.patch.yml` bundle patch through DSH's own patch loader.
 4. Create a private temporary socket directory.
 5. Spawn `dshx-ipc-bridge`, wait for its readiness control message, and expose the resulting `unix://` endpoint to the TUI.
 6. Spawn the pinned Codex TUI with `DSHX_APP_SERVER_ENDPOINT` set to that local endpoint.
 7. Relay app-server JSON between the TUI and the DSH presentation adapter while DSH remains authoritative for all runtime state.
-8. On TUI exit or process shutdown, close presentation state, dispose DSH, terminate the bridge and remove the temporary socket directory.
+8. On TUI exit or process shutdown, close the transport, then dispose the official Context whose root Fiber unwinds the presentation plugin and removes the temporary socket directory.
 
 Ctrl+C is intentionally not intercepted by the Node launcher because it is an in-TUI interaction used to interrupt/steer the active DSH turn. Process `SIGTERM` is propagated for lifecycle shutdown.
 
@@ -93,7 +97,7 @@ The test suite contains ownership guards for these boundaries. Missing official 
 
 ## Development-only transport
 
-The historical deterministic protocol PoC and TCP/WebSocket stub remain useful test fixtures for protocol work, but they are not copied into the installable production package. The `ws` dependency is development-only.
+The historical deterministic protocol PoC (`devtools/protocol-poc.mjs`) and TCP/WebSocket stub (`devtools/stub-server.mjs`) remain useful test fixtures for protocol work, but they live outside the production `src/` tree and are not copied into the installable production package. The `ws` dependency is development-only.
 
 The real TUI smoke test uses `bin/dshx-stub-local.mjs`, which drives the deterministic fixture through the same packaged local-IPC bridge as production.
 
