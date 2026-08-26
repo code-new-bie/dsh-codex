@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dshThreadItemsPage, dshThreadTurnsPage } from '../src/dsh/history-pages.mjs';
+import { dshThreadItemsPage, dshThreadTurnsPage } from '../src/tui-protocol/history-pages.mjs';
 
 function controller() {
   const agent = {

@@ -13,15 +13,15 @@ import {
   normalizeSessionHeaders
 } from './shapes.mjs';
 import { executeDshCommand } from '../dsh/commands.mjs';
-import { dshThreadItemsPage, dshThreadTurnsPage } from '../dsh/history-pages.mjs';
+import { dshThreadItemsPage, dshThreadTurnsPage } from './history-pages.mjs';
 import { DshHostApi } from '../dsh/host-api.mjs';
-import { codexPlanTarget, threadSettingsUpdatedNotification } from '../dsh/plan-presentation.mjs';
+import { codexPlanTarget, threadSettingsUpdatedNotification } from './plan-presentation.mjs';
 import { DshPermissionView } from '../dsh/permissions.mjs';
-import { codexForkAtSeq } from '../dsh/session-fork.mjs';
-import { dshSkillsListEntry } from '../dsh/skills.mjs';
-import { foldDshSessionTitle, threadNameUpdatedNotification } from '../dsh/thread-title.mjs';
+import { codexForkAtSeq } from './session-fork.mjs';
+import { dshSkillsListEntry } from './skills.mjs';
+import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
 import { DshThreadController } from '../dsh/thread-controller.mjs';
-import { codexInputToDshContent, dshContentText } from '../dsh/user-input.mjs';
+import { codexInputToDshContent, dshContentText } from './user-input.mjs';
 import { DshUserQuestionBridge } from '../dsh/user-question-bridge.mjs';
 import { DshUserShellBridge } from '../dsh/user-shell.mjs';
 import { persistedTokenUsageNotification } from '../dsh/token-usage.mjs';
