@@ -11,3 +11,4 @@ coverage/
 .idea/
 .build/
 .upstream/
+.release/
