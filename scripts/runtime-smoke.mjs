@@ -23,6 +23,11 @@ const REQUIRED_SERVICES = [
   'planMode'
 ];
 
+// CI-grade disks boot well inside these defaults; slow checkouts (for example
+// a WSL /mnt/c mount) can raise them without touching the script.
+const BOOT_TIMEOUT_MS = Number(process.env.DSHX_SMOKE_BOOT_TIMEOUT_MS ?? 20_000);
+const DISPOSE_TIMEOUT_MS = Number(process.env.DSHX_SMOKE_DISPOSE_TIMEOUT_MS ?? 10_000);
+
 function withTimeout(promise, timeoutMs, label) {
   let timer;
   return Promise.race([
@@ -39,7 +44,7 @@ try {
   process.stdout.write('booting official DSH composition with production patch watchers enabled\n');
   ctx = await withTimeout(
     bootDshxRuntime({ cwd: process.cwd(), watch: true }),
-    20_000,
+    BOOT_TIMEOUT_MS,
     'official DSH composition boot'
   );
   process.stdout.write('official DSH composition boot completed\n');
@@ -59,7 +64,7 @@ try {
   if (ctx) {
     process.stdout.write('disposing official DSH composition\n');
     try {
-      await withTimeout(Promise.resolve(ctx.dispose?.()), 10_000, 'official DSH composition disposal');
+      await withTimeout(Promise.resolve(ctx.dispose?.()), DISPOSE_TIMEOUT_MS, 'official DSH composition disposal');
       process.stdout.write('official DSH composition disposed\n');
     } catch (disposeError) {
       if (!primaryError) primaryError = disposeError;
