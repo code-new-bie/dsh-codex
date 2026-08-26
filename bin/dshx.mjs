@@ -11,6 +11,7 @@ import {
   DSHX_DOCTOR_DISPOSE_TIMEOUT_MS,
   isSupportedNodeVersion
 } from '../src/cli/runtime.mjs';
+import { ensureProfileInstalled } from '../src/dsh/profile-bootstrap.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -66,47 +67,13 @@ function binaryCandidate(baseName) {
     || path.join(ROOT, 'dist', 'bin', fileName);
 }
 
-function dshHome() {
-  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-}
-
-/**
- * Ensure the selected profile exists and carries this exact package version
- * as an activated bundle layer. Uses the official `dsh plugin add` machinery
- * (profile auto-init + pnpm forward + bundles reconcile); idempotent.
- */
-function ensureProfileInstalled(profileName, runtimeBoot) {
-  const selected = runtimeBoot.runtimeInternals.selectedProfile(profileName);
-  const manifestPath = path.join(dshHome(), 'profiles', selected, 'package.json');
-  let satisfied = false;
-  try {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const bundles = manifest.dsh?.profile?.bundles ?? [];
-    const dependencies = manifest.dependencies ?? {};
-    satisfied =
-      dependencies[PACKAGE.name] === VERSION && bundles.includes(PACKAGE.name);
-  } catch {
-    // Missing or unreadable manifest: the official command initializes it.
-  }
-  if (satisfied) return { profile: selected, action: 'already-installed' };
-
-  if (process.env.DSHX_SKIP_PROFILE_BOOTSTRAP === '1') {
-    return { profile: selected, action: 'skipped' };
-  }
-  const result = spawnSync(
-    'dsh',
-    ['plugin', '--profile', selected, 'add', ROOT],
-    { stdio: 'inherit', shell: process.platform === 'win32' }
-  );
-  if (result.error?.code === 'ENOENT') {
-    throw new Error(
-      "official 'dsh' CLI not found on PATH; install DeepSeek Harness to manage the DSHX surface profile"
-    );
-  }
-  if (result.status !== 0) {
-    throw new Error(`failed to install ${PACKAGE.name} into profile '${selected}' via dsh plugin add (exit ${result.status})`);
-  }
-  return { profile: selected, action: 'installed' };
+function bootstrapSurfaceProfile(runtimeBoot) {
+  return ensureProfileInstalled({
+    packageRoot: ROOT,
+    name: PACKAGE.name,
+    version: VERSION,
+    profile: process.env.DSHX_PROFILE || runtimeBoot.runtimeInternals.DEFAULT_PROFILE
+  });
 }
 
 async function loadRuntimeModules() {
@@ -219,7 +186,7 @@ async function doctor(runtimeBoot) {
   let profileDetail = '';
   let profileOk = true;
   try {
-    const ensured = ensureProfileInstalled(undefined, runtimeBoot);
+    const ensured = bootstrapSurfaceProfile(runtimeBoot);
     profileDetail = `profile '${ensured.profile}' (${ensured.action})`;
   } catch (error) {
     profileOk = false;
@@ -310,7 +277,7 @@ async function run() {
     // then hand control entirely to the official composition: the loader
     // mounts the dshx-startup / dshx-presentation rows declared by the bundle
     // patch, and the transport endpoint arrives as a provided service.
-    ensureProfileInstalled(undefined, runtimeBoot);
+    bootstrapSurfaceProfile(runtimeBoot);
     ctx = await runtimeBoot.bootDshxRuntime({ cwd: process.cwd(), watch: true });
   } catch (error) {
     process.stderr.write(`dshx: failed to boot DeepSeek Harness surface profile: ${error instanceof Error ? error.message : error}\n`);

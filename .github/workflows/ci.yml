@@ -45,6 +45,8 @@ jobs:
         run: npm test
       - name: Verify DSH ownership boundary
         run: node scripts/verify-ownership-boundary.mjs
+      - name: Enable pnpm for the surface profile bootstrap
+        run: corepack enable pnpm
       - name: Boot and dispose official DeepSeek Harness composition
         run: node scripts/runtime-smoke.mjs
       - name: Syntax check shipped JavaScript
@@ -93,6 +95,10 @@ jobs:
       - name: Verify local IPC data plane
         shell: bash
         run: dist/bin/dshx-ipc-bridge --check
+      - name: Enable pnpm for the official plugin machinery
+        run: corepack enable pnpm
+      - name: Verify bundle install end to end
+        run: node scripts/verify-bundle-install.mjs
       - name: Exercise real TUI through Linux PTY + CJK + resize
         shell: bash
         run: |

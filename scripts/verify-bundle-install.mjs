@@ -17,6 +17,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolveDshInvocation } from '../src/dsh/profile-bootstrap.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -80,10 +81,11 @@ try {
   console.log(`[verify-bundle] packed ${tarballName}`);
 
   // ── 2. official install into a brand-new profile ──────────────────────
+  const dsh = resolveDshInvocation(ROOT, isolatedEnv);
   const add = run(
     'dsh plugin add',
-    'dsh',
-    ['plugin', '--profile', PROFILE, 'add', `./${tarballName}`],
+    dsh.command,
+    [...dsh.args, 'plugin', '--profile', PROFILE, 'add', `./${tarballName}`],
     { cwd: packDir, check: true }
   );
   if (!add.stdout.includes(`initialized profile ${PROFILE}`) && !add.stdout.includes('already')) {
@@ -109,7 +111,7 @@ try {
   // patch files (including !!js nodes), so we reuse DSH's own parser.
   const { loadOptionalPatches } = await import('@deepseek-ai/dsh-app-boot');
   const dumpPath = path.join(work, 'dump-config.yml');
-  const dump = run('dsh --dump-config', 'dsh', ['--profile', PROFILE, '--dump-config']);
+  const dump = run('dsh --dump-config', dsh.command, [...dsh.args, '--profile', PROFILE, '--dump-config']);
   if (dump.status !== 0) {
     throw new Error(`--dump-config failed: ${dump.stderr || dump.stdout}`);
   }

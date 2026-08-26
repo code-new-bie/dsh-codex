@@ -1,6 +1,13 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { bootDshxRuntime } from '../src/dsh/runtime-boot.mjs';
+import { ensureProfileInstalled } from '../src/dsh/profile-bootstrap.mjs';
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PACKAGE = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
 
 const REQUIRED_SERVICES = [
   'agents',
@@ -41,6 +48,14 @@ function withTimeout(promise, timeoutMs, label) {
 let ctx;
 let primaryError;
 try {
+  // The smoke targets the production surface profile; make sure the official
+  // plugin machinery has it installed before composing.
+  const ensured = ensureProfileInstalled({
+    packageRoot: PACKAGE_ROOT,
+    name: PACKAGE.name,
+    version: PACKAGE.version
+  });
+  process.stdout.write(`surface profile '${ensured.profile}' ${ensured.action}\n`);
   process.stdout.write('booting official DSH composition with production patch watchers enabled\n');
   ctx = await withTimeout(
     bootDshxRuntime({ cwd: process.cwd(), watch: true }),

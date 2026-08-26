@@ -63,8 +63,10 @@ requireText('src/dsh/presentation-plugin.mjs', 'ctx.provide(SERVICE_KEY');
 requireText('src/dsh/presentation-plugin.mjs', "inject = ['dshxStartup']");
 requireText('src/dsh/startup-plugin.mjs', "provide('dshxStartup'");
 // The launcher only bootstraps via the official plugin command, never mounts
-// rows itself.
-requireText('bin/dshx.mjs', "'plugin', '--profile'");
+// rows itself; the shared bootstrap module owns the command assembly and
+// resolves the dsh CLI without requiring a global installation.
+requireText('src/dsh/profile-bootstrap.mjs', "'plugin', '--profile'");
+requireText('src/dsh/profile-bootstrap.mjs', 'resolveDshInvocation');
 forbidText('src/dsh/runtime-boot.mjs', 'bootDshxPresentationRuntime');
 // Presentation lifetime may adapt the Context shape, but teardown must remain
 // delegated to Cordis/DSH root-fiber ownership rather than a DSHX runtime.

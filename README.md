@@ -14,6 +14,25 @@ No separate Codex installation, remote-mode command, bridge command, DSH WebUI, 
 
 The interaction target is the pinned Codex CLI/TUI: welcome screen, composer, slash commands, model and permission pickers, approvals, ask-user flows, tool/shell cells, diffs, plan/reasoning presentation, steering, Ctrl+C interrupt, resume, status/footer, scrolling, resize and mouse behavior. Windows Terminal and CJK/IME are first-class release gates.
 
+## Plugin usage
+
+DSHX ships as a standard DSH profile bundle: the package manifest declares
+`dsh.bundle.patch`, so the official machinery installs, layers, hot-reloads
+and withdraws it like any other composition row set.
+
+```bash
+# Install into any profile (tarball from a release, or this checkout):
+dsh plugin --profile tui add ./code-new-bie-dshx-tui-<version>.tgz
+
+# Withdraw it again; the surface disappears on the next profile start:
+dsh plugin --profile tui remove @code-new-bie/dshx-tui
+```
+
+The zero-argument `dshx` launcher is a thin bootstrap over the same command:
+it ensures the selected profile carries this exact package version, boots the
+official composition, and spawns the pinned TUI against the endpoint that the
+loader-mounted surface rows publish.
+
 ## Ownership boundary
 
 We maintain only:
@@ -124,7 +143,13 @@ dshx doctor
 dshx
 ```
 
-`dshx doctor` checks the DSH-compatible Node runtime, the packaged TUI, the local IPC data plane, the official DSH composition and the isolated DSHX presentation home/IPC path.
+`dshx doctor` checks the DSH-compatible Node runtime, the packaged TUI, the local IPC data plane, the `tui` surface profile (bootstrapped idempotently through the official plugin command), the official DSH composition with the loader-activated surface rows, and the isolated DSHX presentation home/IPC path.
+
+For the full plugin-delivery proof — pack → official install into a throwaway profile → composed-tree assertions → loader activation with a live transport — run:
+
+```bash
+npm run verify:bundle
+```
 
 ## Release model
 

@@ -61,14 +61,13 @@ Therefore production does not depend on Codex's experimental TCP WebSocket remot
 
 `dshx` performs the following sequence:
 
-1. Resolve and validate the packaged `dshx-tui` and `dshx-ipc-bridge` binaries.
-2. Create an isolated presentation-only `CODEX_HOME` under `~/.dshx/codex-tui` (or the development override).
-3. Boot the official DSH composition in Node and mount the `dshx-presentation` Cordis plugin on it; the plugin starts the local transport and publishes the endpoint as the `dshxPresentation` service. Surface locks load from the declarative `cordis.patch.yml` bundle patch through DSH's own patch loader.
-4. Create a private temporary socket directory.
-5. Spawn `dshx-ipc-bridge`, wait for its readiness control message, and expose the resulting `unix://` endpoint to the TUI.
-6. Spawn the pinned Codex TUI with `DSHX_APP_SERVER_ENDPOINT` set to that local endpoint.
-7. Relay app-server JSON between the TUI and the DSH presentation adapter while DSH remains authoritative for all runtime state.
-8. On TUI exit or process shutdown, close the transport, then dispose the official Context whose root Fiber unwinds the presentation plugin and removes the temporary socket directory.
+1. Bootstrap the surface profile through the official plugin machinery: `dsh plugin --profile <p> add <package>` (idempotent — a profile already pinning this exact package version as a bundle layer is left untouched). The package manifest declares `dsh.bundle.patch`, so the loader picks the surface up as a real bundle layer.
+2. Boot the official DSH composition for that profile; the loader mounts the rows declared by the shipped `cordis.patch.yml` (`dshx-startup`, `dshx-presentation`) and locks the competing headless presentation rows.
+3. The startup row publishes launch parameters (presentation home, packaged binaries, version) as the `dshxStartup` service; the presentation row injects it, starts the local transport, and publishes the endpoint as the `dshxPresentation` service.
+4. Spawn `dshx-ipc-bridge`, wait for its readiness control message, and expose the resulting `unix://` endpoint to the TUI.
+5. Spawn the pinned Codex TUI with `DSHX_APP_SERVER_ENDPOINT` set to that local endpoint and an isolated presentation-only `CODEX_HOME`.
+6. Relay app-server JSON between the TUI and the DSH presentation adapter while DSH remains authoritative for all runtime state.
+7. On TUI exit or process shutdown, dispose the official Context: its root Fiber unwinds the presentation plugin (closing the transport and removing the temporary socket directory) — the Fiber is the sole teardown authority.
 
 Ctrl+C is intentionally not intercepted by the Node launcher because it is an in-TUI interaction used to interrupt/steer the active DSH turn. Process `SIGTERM` is propagated for lifecycle shutdown.
 
