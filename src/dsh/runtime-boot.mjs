@@ -1,7 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   boot,
   composeEntries,
@@ -13,11 +12,10 @@ import {
   watchUserPatches
 } from '@deepseek-ai/dsh-app-boot';
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment';
-import { plugin as dshxPresentationPlugin } from './presentation-plugin.mjs';
 
 const NAME = 'dshx';
 const DSH_PROFILE_BIN_NAME = 'dsh';
-const DEFAULT_PROFILE = 'headless';
+const DEFAULT_PROFILE = 'tui';
 const PROFILE_ROOT_FILENAME = 'cordis.yml';
 // Match the official `dsh` launcher's profile-root contract: this file is only
 // the Loader/include base anchor. The real user-owned configuration is carried
@@ -25,33 +23,11 @@ const PROFILE_ROOT_FILENAME = 'cordis.yml';
 // Rewriting this empty root on every boot is intentional DSH behavior and
 // prevents Loader tree write-back from becoming a second persisted config.
 const PROFILE_ROOT_CONFIG = `# DSHX uses the same empty profile root contract as the official dsh launcher.\n# The effective tree is composed from DSH bundle and patch layers.\n# Edit cordis.patch.yml, not this file.\n[]\n`;
-// The DSHX surface bundle patch rides over the official profile layers as a
-// declarative artifact loaded through DSH's own optional-patch loader.
-const DSHX_PATCH_FILENAME = 'cordis.patch.yml';
-
-function ownPackageRoot() {
-  // <root>/src/dsh/runtime-boot.mjs → <root>. The depth matches both the
-  // source checkout and the staged release layout.
-  return dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-}
-
-function bundlePatchPath() {
-  return join(ownPackageRoot(), DSHX_PATCH_FILENAME);
-}
-
-/**
- * Load the declarative DSHX surface locks from the shipped cordis.patch.yml.
- * The file is the single source of truth for which official presentation rows
- * this surface replaces; a missing or empty lock set fails closed so a broken
- * package can never boot with a competing runner still enabled.
- */
-function bundleSurfacePatches() {
-  const patches = loadOptionalPatches(DSH_PROFILE_BIN_NAME, bundlePatchPath());
-  if (!patches || patches.length === 0) {
-    throw new Error('dshx: cordis.patch.yml is missing or empty; refusing to boot with competing presentation surfaces enabled');
-  }
-  return patches;
-}
+// The DSHX surface arrives as a real bundle layer: the package manifest
+// declares `dsh.bundle.patch`, so the official loader composes our rows and
+// surface locks from the installed profile. This module owns no patch of its
+// own; launcher patches stay limited to installation-equivalent environment
+// wiring (agent preset roots, telemetry switch).
 
 function installationAnchor() {
   return createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json');
@@ -95,9 +71,10 @@ function telemetryPatch(entries) {
  * Load the exact official DSH profile layers that DSHX presents.
  *
  * Order remains DSH-owned: profile bundle layers -> profile user patch ->
- * $DSH_HOME/cordis.patch.yml. DSHX then adds only installation-equivalent
- * launcher patches and its presentation locks. Out-of-tree profile plugins
- * resolve from the profile directory through DSH's own healed module fallback.
+ * $DSH_HOME/cordis.patch.yml. The DSHX surface itself is one of the bundle
+ * layers (`dsh.bundle.patch`); the launcher adds only installation-equivalent
+ * environment patches on top. Out-of-tree profile plugins resolve from the
+ * profile directory through DSH's own healed module fallback.
  */
 export function dshxRuntimeProfile({
   profile: explicitProfile,
@@ -120,10 +97,7 @@ export function dshxRuntimeProfile({
   const launcherPatches = [
     ...shippedAgentPresetPatch(beforeLauncher, installAnchor),
     ...telemetryPatch(beforeLauncher),
-    ...structuredClone(overlays),
-    // Last on purpose: DSH user/profile configuration owns capabilities, but
-    // cannot re-enable a competing presentation runner in the DSHX process.
-    ...structuredClone(bundleSurfacePatches())
+    ...structuredClone(overlays)
   ];
 
   return {
@@ -218,8 +192,12 @@ export async function bootDshxRuntime({
       structuredClone(composition.patches),
       (hostCtx) => {
         hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment);
-      },
-      pathToFileURL(composition.installAnchor).href
+      }
+      // No bareModuleBaseUrl: match the official CLI so row names resolve
+      // from the profile directory (Node walks <profile>/node_modules then
+      // the healed $DSH_HOME/profiles/node_modules fallback). Anchoring every
+      // import to the installation would make third-party surface bundles
+      // — including ours — unresolvable.
     );
     attachPresentationLifetime(ctx);
     if (watch) await installProfileWatchers(ctx, options);
@@ -238,50 +216,12 @@ export async function bootDshxRuntime({
   }
 }
 
-/**
- * Boot the official composition and mount the DSHX presentation plugin on it.
- * Production `dshx` entry path: once the packaged bridge reports readiness,
- * the transport endpoint is available as the ctx service `dshxPresentation`.
- */
-export async function bootDshxPresentationRuntime({
-  cwd = process.cwd(),
-  presentationHome,
-  version,
-  bridgeCommand,
-  socketRoot,
-  debug = false,
-  ...bootOptions
-} = {}) {
-  const ctx = await bootDshxRuntime({ cwd, ...bootOptions });
-  let mounted = false;
-  try {
-    await ctx.plugin(dshxPresentationPlugin, {
-      cwd,
-      home: presentationHome,
-      version,
-      bridgeCommand,
-      socketRoot,
-      debug
-    });
-    mounted = true;
-  } finally {
-    if (!mounted) {
-      try {
-        await disposeOfficialContext(ctx);
-      } catch {}
-    }
-  }
-  return ctx;
-}
-
 export const runtimeInternals = {
   NAME,
   DSH_PROFILE_BIN_NAME,
   DEFAULT_PROFILE,
   PROFILE_ROOT_FILENAME,
   PROFILE_ROOT_CONFIG,
-  DSHX_SURFACE_PATCHES: bundleSurfacePatches(),
-  bundlePatchPath,
   installationAnchor,
   selectedProfile,
   profileHome,

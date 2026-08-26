@@ -2,35 +2,28 @@ import z from '@deepseek-ai/schemastery';
 import { startDshxLocalServer } from './local-server.mjs';
 
 /**
- * Cordis plugin wrapping the DSHX presentation lifetime.
+ * dshx-presentation — the surface's transport host row.
  *
- * The plugin owns the production local-IPC transport: it boots nothing itself
- * (the official DSH composition is already mounted on the injected Context),
- * starts the packaged bridge + JSONL stdio relay against that Context, and
- * publishes the resulting endpoint as the `dshxPresentation` service. Disposal
- * returns the transport closer; teardown authority remains the Cordis root
- * Fiber, matching the official plugin contract (name / inject / Config /
- * apply, named exports only).
+ * Loaded by the Cordis loader through the bundle patch (no dynamic mounting):
+ * it starts the packaged bridge + adapter transport against the already-booted
+ * official composition Context, publishes the endpoint as the
+ * `dshxPresentation` service, and returns the transport closer as its
+ * disposer. Teardown authority remains the Cordis root Fiber.
+ *
+ * Launch inputs arrive exclusively from the injected `dshxStartup` service
+ * (see startup-plugin.mjs) — the official three-stage pattern — so this module
+ * carries no environment or path policy of its own.
  */
 
 /** Stable Cordis plugin name. */
 export const name = 'dshx-presentation';
 
-/**
- * No hard service injections on purpose: every DSH capability is consumed
- * lazily through ctx.get so an absent optional service degrades the matching
- * UI instead of blocking the whole composition.
- */
-export const inject = [];
+/** The startup row's service is a hard prerequisite for the transport. */
+export const inject = ['dshxStartup'];
 
-/** Serializable launch configuration for the presentation transport. */
+/** Static overrides straight from the patch row; everything else flows via dshxStartup. */
 export const Config = z.object({
-  cwd: z.string(),
-  home: z.string(),
-  version: z.string(),
-  bridgeCommand: z.string(),
-  socketRoot: z.string(),
-  debug: z.boolean()
+  socketRoot: z.string()
 });
 
 /** Service key published on the Context after the endpoint is ready. */
@@ -43,17 +36,21 @@ export async function apply(ctx, config = {}) {
   if (!ctx || typeof ctx.provide !== 'function') {
     throw new Error('dshx-presentation requires a Cordis Context with provide()');
   }
-  const debug = config.debug === true;
+  const launch = ctx.dshxStartup;
+  if (!launch || typeof launch.home !== 'string') {
+    throw new Error('dshx-presentation requires the dshxStartup service (mount the dshx-startup row first)');
+  }
+  const debug = launch.debug === true;
   const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
 
   const server = await internals.start({
-    cwd: config.cwd,
-    home: config.home,
-    version: config.version,
-    bridgeCommand: config.bridgeCommand,
+    cwd: launch.cwd,
+    home: launch.home,
+    version: launch.version,
+    bridgeCommand: launch.bridgeCommand,
     socketRoot: config.socketRoot,
     // The composition Context already exists; never double-boot. Root-fiber
-    // disposal stays owned by the caller/fiber, so the transport must not
+    // disposal stays owned by the composition, so the transport must not
     // dispose the runtime it lives in (double teardown would re-enter the
     // Fiber from inside its own disposer).
     runtime: ctx,
@@ -64,10 +61,11 @@ export async function apply(ctx, config = {}) {
   ctx.provide(SERVICE_KEY, {
     path: server.path,
     url: server.url,
-    close: server.close
+    close: server.close,
+    tuiCommand: launch.tuiCommand
   });
   return server.close;
 }
 
-/** Bundle-shaped export consumed by runtime-boot's dynamic mount. */
+/** Bundle-shaped export consumed by the loader through the patch row. */
 export const plugin = { name, inject, Config, apply };

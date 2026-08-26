@@ -77,23 +77,32 @@ if (!fs.existsSync(codexLicense)) {
 }
 fs.copyFileSync(codexLicense, path.join(stage, 'LICENSE'));
 
+fs.copyFileSync(path.join(root, 'cordis.patch.yml'), path.join(stage, 'cordis.patch.yml'));
+
 const packageJson = {
-  name: 'dsh-codex',
+  name: rootPackage.name,
   version,
-  description: 'Codex-grade TUI presentation for official DeepSeek Harness',
+  description: rootPackage.description ?? 'Codex-grade TUI presentation for official DeepSeek Harness',
   type: 'module',
   license: 'Apache-2.0',
   os: [platform],
   cpu: [arch],
   engines: rootPackage.engines,
   bin: { dshx: './bin/dshx.mjs' },
-  dependencies: rootPackage.dependencies,
+  // The staged CLI must keep its bundle identity: the launcher bootstraps the
+  // surface profile by installing this very directory via `dsh plugin add`.
+  exports: rootPackage.exports,
+  dsh: rootPackage.dsh,
+  // Runtime host services ride as peers in the repo manifest but must be real
+  // dependencies of the installable CLI closure.
+  dependencies: { ...(rootPackage.dependencies ?? {}), ...(rootPackage.peerDependencies ?? {}) },
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
     'bin/dshx.mjs',
     'src/cli',
     'src/dsh',
     'src/protocol',
+    'cordis.patch.yml',
     'dist/bin',
     'upstream',
     'README.md',

@@ -13,9 +13,11 @@ if (!fs.existsSync(packagePath)) throw new Error(`Missing package.json at ${pack
 if (!fs.existsSync(lockPath)) throw new Error(`Missing npm lockfile at ${lockPath}`);
 
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-const expected = pkg.dependencies?.['@deepseek-ai/dsh'];
+// Host services are declared as peerDependencies (official bundle shape);
+// either field may pin them, but one must pin an exact release.
+const expected = pkg.dependencies?.['@deepseek-ai/dsh'] ?? pkg.peerDependencies?.['@deepseek-ai/dsh'];
 if (typeof expected !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(expected)) {
-  throw new Error('DSHX requires an exact @deepseek-ai/dsh dependency version');
+  throw new Error('DSHX requires an exact @deepseek-ai/dsh dependency or peerDependency version');
 }
 
 const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));

@@ -33,35 +33,15 @@ const REQUIRED_RUNTIME_SERVICES = [
   'approval',
   'userQuestions',
   'skills',
-  'planMode'
+  'planMode',
+  // The surface rows themselves: their services exist only when the loader
+  // activated the bundle patch (dshx-startup / dshx-presentation).
+  'dshxStartup',
+  'dshxPresentation'
 ];
 
 function usage() {
-  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI, local IPC and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_IPC_BRIDGE_BIN      Override the packaged local IPC bridge (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
-}
-
-function packagedTuiBinary() {
-  const name = process.platform === 'win32' ? 'dshx-tui.exe' : 'dshx-tui';
-  const candidates = [
-    process.env.DSHX_TUI_BIN,
-    path.join(ROOT, 'dist', 'bin', name),
-    path.join(ROOT, '.build', 'codex', 'release', process.platform === 'win32' ? 'codex-tui.exe' : 'codex-tui')
-  ].filter(Boolean);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
-}
-
-function packagedIpcBridgeBinary() {
-  const name = process.platform === 'win32' ? 'dshx-ipc-bridge.exe' : 'dshx-ipc-bridge';
-  const candidates = [
-    process.env.DSHX_IPC_BRIDGE_BIN,
-    path.join(ROOT, 'dist', 'bin', name),
-    path.join(ROOT, '.build', 'codex', 'release', name)
-  ].filter(Boolean);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
-}
-
-function dshxTuiHome() {
-  return path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'));
+  return `DSHX ${VERSION}\n\nUsage:\n  dshx                     Start DSHX in the current project\n  dshx <prompt>            Start with an initial prompt\n  dshx resume              Open the Codex-style DSH session picker\n  dshx resume --last       Resume the most recent DSH session\n  dshx resume <session>    Resume a specific DSH session\n  dshx doctor              Check packaged TUI, local IPC and official DSH composition\n  dshx --version           Print version\n  dshx --help              Show this help\n\nEnvironment:\n  DSHX_TUI_BIN             Override the packaged DSHX TUI binary (development only)\n  DSHX_IPC_BRIDGE_BIN      Override the packaged local IPC bridge (development only)\n  DSHX_TUI_HOME            Override DSHX presentation-only Codex home (development only)\n  DSHX_PROFILE             Override the DSH profile surface (default: tui)\n  DSHX_DEBUG=1             Print DSHX adapter diagnostics\n\nPlugin usage:\n  The DSHX surface ships as a standard DSH profile bundle. Manage it through\n  the official machinery, e.g.:\n    dsh plugin --profile tui add ${PACKAGE.name}\n  The zero-argument launcher only bootstraps the same profile via the same\n  command, then hands control to the official DSH composition.\n\nProduct boundary:\n  DSHX owns only the launcher, Codex TUI thin fork and presentation adapter.\n  DeepSeek Harness remains the authoritative Agent/Session/Tool runtime.\n  DSHX never reads or writes the user's ordinary CODEX_HOME.\n`;
 }
 
 function commandDetail(command, result) {
@@ -80,15 +60,79 @@ function withTimeout(promise, timeoutMs, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
-function presentationHomeCheck(localServerInternals, loadError) {
-  const home = dshxTuiHome();
+function binaryCandidate(baseName) {
+  const fileName = process.platform === 'win32' ? `${baseName}.exe` : baseName;
+  return process.env[baseName === 'dshx-tui' ? 'DSHX_TUI_BIN' : 'DSHX_IPC_BRIDGE_BIN']
+    || path.join(ROOT, 'dist', 'bin', fileName);
+}
+
+function dshHome() {
+  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+}
+
+/**
+ * Ensure the selected profile exists and carries this exact package version
+ * as an activated bundle layer. Uses the official `dsh plugin add` machinery
+ * (profile auto-init + pnpm forward + bundles reconcile); idempotent.
+ */
+function ensureProfileInstalled(profileName, runtimeBoot) {
+  const selected = runtimeBoot.runtimeInternals.selectedProfile(profileName);
+  const manifestPath = path.join(dshHome(), 'profiles', selected, 'package.json');
+  let satisfied = false;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const bundles = manifest.dsh?.profile?.bundles ?? [];
+    const dependencies = manifest.dependencies ?? {};
+    satisfied =
+      dependencies[PACKAGE.name] === VERSION && bundles.includes(PACKAGE.name);
+  } catch {
+    // Missing or unreadable manifest: the official command initializes it.
+  }
+  if (satisfied) return { profile: selected, action: 'already-installed' };
+
+  if (process.env.DSHX_SKIP_PROFILE_BOOTSTRAP === '1') {
+    return { profile: selected, action: 'skipped' };
+  }
+  const result = spawnSync(
+    'dsh',
+    ['plugin', '--profile', selected, 'add', ROOT],
+    { stdio: 'inherit', shell: process.platform === 'win32' }
+  );
+  if (result.error?.code === 'ENOENT') {
+    throw new Error(
+      "official 'dsh' CLI not found on PATH; install DeepSeek Harness to manage the DSHX surface profile"
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(`failed to install ${PACKAGE.name} into profile '${selected}' via dsh plugin add (exit ${result.status})`);
+  }
+  return { profile: selected, action: 'installed' };
+}
+
+async function loadRuntimeModules() {
+  try {
+    const runtimeBoot = await import('../src/dsh/runtime-boot.mjs');
+    let localServerInternals;
+    try {
+      ({ localServerInternals } = await import('../src/dsh/local-server.mjs'));
+    } catch {
+      localServerInternals = undefined;
+    }
+    return { runtimeBoot, localServerInternals };
+  } catch (error) {
+    return { loadError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function presentationHomeCheck(localServerInternals) {
+  const home = path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'));
   try {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
     const stat = fs.statSync(home);
     if (!stat.isDirectory()) throw new Error('path exists but is not a directory');
     fs.accessSync(home, fs.constants.R_OK | fs.constants.W_OK);
     if (!localServerInternals) {
-      throw new Error(`IPC policy unavailable because DSH modules failed to load: ${loadError}`);
+      throw new Error('IPC policy unavailable because DSH modules failed to load');
     }
 
     // On Windows this also enforces that a custom DSHX_TUI_HOME stays below
@@ -104,20 +148,18 @@ function presentationHomeCheck(localServerInternals, loadError) {
   }
 }
 
-async function officialRuntimeCheck(runtimeBoot, loadError) {
-  if (typeof runtimeBoot?.bootDshxRuntime !== 'function') {
-    return { ok: false, detail: `official DSH modules failed to load: ${loadError ?? 'unknown error'}` };
-  }
-
+async function officialRuntimeCheck(runtimeBoot) {
   let ctx;
   let primaryError;
   let cleanupError;
   try {
     // Doctor deliberately exercises the same official composition and profile
-    // watcher path as production startup. This catches missing native optional
-    // dependencies (for example sharp/koffi) that a static bundle-entry check
-    // cannot detect. The bounded timeout is intentionally generous enough for
-    // first-run Windows module/native initialization on supported hardware.
+    // watcher path as production startup, including the loader-mounted surface
+    // rows (their services double as row-activation evidence). This catches
+    // missing native optional dependencies (for example sharp/koffi) that a
+    // static bundle-entry check cannot detect. The bounded timeout is
+    // intentionally generous enough for first-run Windows module/native
+    // initialization on supported hardware.
     ctx = await withTimeout(
       runtimeBoot.bootDshxRuntime({ cwd: process.cwd(), watch: true }),
       DSHX_DOCTOR_BOOT_TIMEOUT_MS,
@@ -158,35 +200,34 @@ async function officialRuntimeCheck(runtimeBoot, loadError) {
   }
   return {
     ok: true,
-    detail: `official DSH composition boot/dispose (${REQUIRED_RUNTIME_SERVICES.length} required services)`
+    detail: `official DSH composition boot/dispose (${REQUIRED_RUNTIME_SERVICES.length} required services, surface rows active)`
   };
 }
 
-async function doctor() {
-  const executable = packagedTuiBinary();
-  const tuiCheck = executable && fs.existsSync(executable)
+async function doctor(runtimeBoot) {
+  const executable = binaryCandidate('dshx-tui');
+  const tuiCheck = fs.existsSync(executable)
     ? spawnSync(executable, ['--version'], { encoding: 'utf8' })
     : { status: 127, stdout: '', stderr: '', error: null };
-  const bridge = packagedIpcBridgeBinary();
-  const bridgeCheck = bridge && fs.existsSync(bridge)
+  const bridge = binaryCandidate('dshx-ipc-bridge');
+  const bridgeCheck = fs.existsSync(bridge)
     ? spawnSync(bridge, ['--check'], { encoding: 'utf8' })
     : { status: 127, stdout: '', stderr: '', error: null };
 
-  let localServerInternals;
-  let runtimeBoot;
-  let runtimeLoadError;
+  const { localServerInternals } = await loadRuntimeModules();
+  const homeCheck = presentationHomeCheck(localServerInternals);
+  let profileDetail = '';
+  let profileOk = true;
   try {
-    const [localServer, loadedRuntimeBoot] = await Promise.all([
-      import('../src/dsh/local-server.mjs'),
-      import('../src/dsh/runtime-boot.mjs')
-    ]);
-    localServerInternals = localServer.localServerInternals;
-    runtimeBoot = loadedRuntimeBoot;
+    const ensured = ensureProfileInstalled(undefined, runtimeBoot);
+    profileDetail = `profile '${ensured.profile}' (${ensured.action})`;
   } catch (error) {
-    runtimeLoadError = error instanceof Error ? error.message : String(error);
+    profileOk = false;
+    profileDetail = error instanceof Error ? error.message : String(error);
   }
-  const homeCheck = presentationHomeCheck(localServerInternals, runtimeLoadError);
-  const runtimeCheck = await officialRuntimeCheck(runtimeBoot, runtimeLoadError);
+  const runtimeCheck = profileOk
+    ? await officialRuntimeCheck(runtimeBoot)
+    : { ok: false, detail: `skipped: ${profileDetail}` };
 
   const rows = [
     ['Node', `${process.version} (required: ${PACKAGE.engines.node})`, isSupportedNodeVersion(process.versions.node)],
@@ -200,6 +241,7 @@ async function doctor() {
       bridgeCheck.status === 0 ? `${bridge} (cross-platform Codex UDS)` : (bridge ? commandDetail(bridge, bridgeCheck) : 'not found'),
       bridgeCheck.status === 0
     ],
+    ['Surface profile', profileDetail, profileOk],
     ['DeepSeek Harness', runtimeCheck.detail, runtimeCheck.ok],
     ['Presentation home / IPC path', homeCheck.detail, homeCheck.ok]
   ];
@@ -219,6 +261,7 @@ async function doctor() {
 async function run() {
   const args = process.argv.slice(2);
   let invocation;
+
   try {
     invocation = parseCliInvocation(args);
   } catch (error) {
@@ -236,7 +279,13 @@ async function run() {
     return;
   }
   if (invocation.kind === 'doctor') {
-    await doctor();
+    const [, runtimeBoot] = await loadRuntimeModules().then((m) => [m.loadError ? undefined : m.runtimeBoot, m.runtimeBoot]);
+    if (!runtimeBoot) {
+      process.stderr.write('dshx: failed to load official DeepSeek Harness runtime modules\n');
+      process.exitCode = 1;
+      return;
+    }
+    await doctor(runtimeBoot);
     return;
   }
 
@@ -247,82 +296,55 @@ async function run() {
     return;
   }
 
-  let bootDshxPresentationRuntime;
-  try {
-    ({ bootDshxPresentationRuntime } = await import('../src/dsh/runtime-boot.mjs'));
-  } catch (error) {
-    process.stderr.write(`dshx: failed to load official DeepSeek Harness runtime: ${error instanceof Error ? error.message : error}\n`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const executable = packagedTuiBinary();
-  if (!executable || !fs.existsSync(executable)) {
-    process.stderr.write(`dshx: packaged TUI binary not found (${executable ?? 'unknown path'})\n`);
-    process.stderr.write('Run `dshx doctor` for build/install guidance.\n');
-    process.exitCode = 127;
-    return;
-  }
-  const bridge = packagedIpcBridgeBinary();
-  if (!bridge || !fs.existsSync(bridge)) {
-    process.stderr.write(`dshx: packaged local IPC bridge not found (${bridge ?? 'unknown path'})\n`);
-    process.stderr.write('Run `dshx doctor` for build/install guidance.\n');
-    process.exitCode = 127;
-    return;
-  }
-
-  const tuiHome = dshxTuiHome();
-  try {
-    fs.mkdirSync(tuiHome, { recursive: true, mode: 0o700 });
-  } catch (error) {
-    process.stderr.write(`dshx: cannot create presentation home ${tuiHome}: ${error instanceof Error ? error.message : error}\n`);
+  const [, runtimeBoot] = await loadRuntimeModules().then((m) => [m.loadError ? undefined : m.runtimeBoot, m.runtimeBoot]);
+  if (!runtimeBoot) {
+    process.stderr.write('dshx: failed to load official DeepSeek Harness runtime modules\n');
     process.exitCode = 1;
     return;
   }
 
   const debug = process.env.DSHX_DEBUG === '1';
-  const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
   let ctx;
   try {
-    // The official composition mounts the dshx-presentation Cordis plugin,
-    // which owns the bridge + adapter transport and publishes the endpoint
-    // as the `dshxPresentation` service.
-    ctx = await bootDshxPresentationRuntime({
-      cwd: process.cwd(),
-      presentationHome: tuiHome,
-      version: VERSION,
-      bridgeCommand: bridge,
-      debug
-    });
+    // Bootstrap the surface profile through the official plugin machinery,
+    // then hand control entirely to the official composition: the loader
+    // mounts the dshx-startup / dshx-presentation rows declared by the bundle
+    // patch, and the transport endpoint arrives as a provided service.
+    ensureProfileInstalled(undefined, runtimeBoot);
+    ctx = await runtimeBoot.bootDshxRuntime({ cwd: process.cwd(), watch: true });
   } catch (error) {
-    process.stderr.write(`dshx: failed to boot DeepSeek Harness/local IPC: ${error instanceof Error ? error.message : error}\n`);
+    process.stderr.write(`dshx: failed to boot DeepSeek Harness surface profile: ${error instanceof Error ? error.message : error}\n`);
     process.exitCode = 1;
     return;
   }
+
+  const startup = ctx.get('dshxStartup');
   const presentation = ctx.get('dshxPresentation');
-  if (!presentation || typeof presentation.close !== 'function') {
-    process.stderr.write('dshx: presentation composition mounted without the dshxPresentation service\n');
+  if (!startup || !presentation || typeof presentation.close !== 'function') {
+    process.stderr.write('dshx: surface rows did not publish dshxStartup/dshxPresentation services\n');
     try { await ctx.dispose?.(); } catch { /* primary failure already reported */ }
     process.exitCode = 1;
     return;
   }
 
-  // Transport teardown first, then the official root Fiber (which unwinds the
-  // plugin whose disposer re-enters the memoized transport close as a no-op).
-  const closePresentation = async () => {
-    let primaryError;
-    try {
-      await presentation.close();
-    } catch (error) {
-      primaryError = error;
-    }
-    try {
-      await ctx.dispose?.();
-    } catch (error) {
-      primaryError ??= error;
-    }
-    if (primaryError) throw primaryError;
-  };
+  const executable = startup.tuiCommand;
+  if (!executable || !fs.existsSync(executable)) {
+    process.stderr.write(`dshx: packaged TUI binary not found (${executable ?? 'unknown path'})\n`);
+    process.stderr.write('Run `dshx doctor` for build/install guidance.\n');
+    try { await ctx.dispose?.(); } catch { /* ignore secondary */ }
+    process.exitCode = 127;
+    return;
+  }
+
+  const tuiHome = startup.home;
+  try {
+    fs.mkdirSync(tuiHome, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    process.stderr.write(`dshx: cannot create presentation home ${tuiHome}: ${error instanceof Error ? error.message : error}\n`);
+    try { await ctx.dispose?.(); } catch { /* ignore secondary */ }
+    process.exitCode = 1;
+    return;
+  }
 
   let child;
   try {
@@ -341,11 +363,7 @@ async function run() {
     });
   } catch (error) {
     process.stderr.write(`dshx: failed to launch pinned Codex TUI: ${error instanceof Error ? error.message : error}\n`);
-    try {
-      await closePresentation();
-    } catch (cleanupError) {
-      if (debug) process.stderr.write(`[dshx] startup cleanup: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}\n`);
-    }
+    try { await ctx.dispose?.(); } catch { /* ignore secondary */ }
     process.exitCode = 127;
     return;
   }
@@ -355,7 +373,10 @@ async function run() {
     if (closing) return;
     closing = true;
     try {
-      await closePresentation();
+      // Root-fiber disposal unwinds the dshx-presentation plugin, whose
+      // disposer closes the transport; the Fiber remains the sole teardown
+      // authority.
+      await ctx.dispose?.();
     } catch (error) {
       process.stderr.write(`dshx: shutdown cleanup failed: ${error instanceof Error ? error.message : error}\n`);
       if (exitCode === 0) exitCode = 1;
