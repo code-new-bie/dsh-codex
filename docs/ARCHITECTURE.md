@@ -56,7 +56,10 @@ If a DSH capability is unavailable or cannot be represented safely, DSHX must di
 
 ## Protocol mapping
 
-Mappings are UI projections, not replacement implementations.
+Mappings are UI projections, not replacement implementations. The Codex
+dialect is confined to `src/tui-protocol/` (wire-format dictionary plus the
+app-server method router); domain modules under `src/dsh/` speak DSH
+vocabulary only, and the ownership guard enforces that placement.
 
 | Codex concept | DSH source |
 |---|---|
