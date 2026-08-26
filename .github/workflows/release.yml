@@ -119,10 +119,30 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: node scripts/package-platform.mjs
+      - name: Enable pnpm for the official plugin machinery (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: corepack enable pnpm
+      - name: Verify bundle install end to end (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          DSHX_REQUIRE_RELEASE: '1'
+        run: node scripts/verify-bundle-install.mjs
       - name: Build installable platform tarball (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: node scripts/package-platform.mjs
+      - name: Enable pnpm for the official plugin machinery (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: corepack enable pnpm
+      - name: Verify bundle install end to end (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DSHX_REQUIRE_RELEASE: '1'
+        run: node scripts/verify-bundle-install.mjs
       - name: Clean install smoke (Unix)
         if: runner.os != 'Windows'
         shell: bash
