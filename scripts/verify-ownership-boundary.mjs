@@ -72,9 +72,10 @@ forbidText('src/dsh/runtime-boot.mjs', 'bootDshxPresentationRuntime');
 // delegated to Cordis/DSH root-fiber ownership rather than a DSHX runtime.
 requireText('src/dsh/runtime-boot.mjs', 'ctx.fiber.dispose()');
 requireText('src/dsh/runtime-boot.mjs', 'attachPresentationLifetime(ctx)');
-// The declared supported DSH line must be enforced at boot, not just pinned
-// declaratively in peerDependencies (which profile installs never resolve).
-requireText('src/dsh/runtime-boot.mjs', 'assertSupportedDshInstallation');
+// The declared supported DSH line is ecosystem-honest metadata: warn once at
+// boot, never block the host (official bundles carry peer ranges, no gates).
+requireText('src/dsh/runtime-boot.mjs', 'reportDshLineCompatibility');
+requireText('src/dsh/runtime-boot.mjs', 'proceeding');
 
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');

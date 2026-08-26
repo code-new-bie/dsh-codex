@@ -133,28 +133,32 @@ test('missing surface profile fails loud instead of silently composing nothing',
   });
 });
 
-test('unsupported installed DSH lines fail loud with an actionable message', () => {
+test('untested DSH lines warn once and proceed; the tested line stays silent', () => {
   temporaryDshHome((home) => {
     seedSurfaceProfile(home);
     const fake = join(home, 'fake-dsh', 'package.json');
     mkdirSync(dirname(fake), { recursive: true });
     writeFileSync(fake, JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9-unheard-of' }));
 
-    assert.throws(
-      () => runtimeInternals.assertSupportedDshInstallation(fake),
-      (error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        return message.includes(runtimeInternals.SUPPORTED_DSH_LINE)
-          && message.includes('9.9.9-unheard-of')
-          && /Upgrade or downgrade/.test(message);
-      },
-      'the mismatch must name both the supported line and the found version'
+    // Ecosystem convention: bundles never block the host. A mismatch warns
+    // exactly once with both versions, then lets every boot proceed.
+    const warnings = [];
+    const first = runtimeInternals.reportDshLineCompatibility(fake, (m) => warnings.push(m));
+    assert.equal(first.compatible, false);
+    assert.equal(first.installed, '9.9.9-unheard-of');
+    runtimeInternals.reportDshLineCompatibility(fake, (m) => warnings.push(m));
+    assert.equal(warnings.length, 1, 'warn-once per process');
+    assert.match(warnings[0], new RegExp(`${runtimeInternals.SUPPORTED_DSH_LINE}.*9\\.9\\.9-unheard-of|9\\.9\\.9-unheard-of.*${runtimeInternals.SUPPORTED_DSH_LINE}`));
+    assert.match(warnings[0], /proceeding/);
+
+    // The tested line itself is silent and reports plain compatibility.
+    const quiet = [];
+    const real = runtimeInternals.reportDshLineCompatibility(
+      new URL('../node_modules/@deepseek-ai/dsh/package.json', import.meta.url),
+      (m) => quiet.push(m)
     );
-    // The supported line itself passes and reports the installation.
-    assert.equal(
-      runtimeInternals.assertSupportedDshInstallation(new URL('../node_modules/@deepseek-ai/dsh/package.json', import.meta.url)),
-      runtimeInternals.SUPPORTED_DSH_LINE
-    );
+    assert.equal(real.compatible, true);
+    assert.deepEqual(quiet, []);
   });
 });
 

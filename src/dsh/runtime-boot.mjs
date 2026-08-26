@@ -41,25 +41,31 @@ function installationAnchor() {
 }
 
 /**
- * Fail loud when the installed official DSH line is not the one this surface
- * is built and tested against. The manifest pin alone is declarative —
- * profile installs never resolve peers — so compatibility must be checked
- * against the copy that will actually boot.
+ * Report which official DSH line this surface was built and tested against,
+ * compared with the installation that will actually boot. Ecosystem
+ * convention: bundles declare compatibility through peer ranges and never
+ * block the host, so a mismatch is a loud one-shot warning, not an error.
  */
-export function assertSupportedDshInstallation(anchor = installationAnchor()) {
+let dshLineWarned = false;
+export function reportDshLineCompatibility(
+  anchor = installationAnchor(),
+  notify = (message) => process.stderr.write(`${message}\n`)
+) {
   let installed;
   try {
     installed = JSON.parse(readFileSync(anchor, 'utf8')).version;
-  } catch (error) {
-    throw new Error(`dshx: cannot read the official DSH installation at ${anchor}: ${error instanceof Error ? error.message : error}`);
+  } catch {
+    return { installed: undefined, supported: SUPPORTED_DSH_LINE, compatible: undefined };
   }
-  if (installed !== SUPPORTED_DSH_LINE) {
-    throw new Error(
-      `dshx supports official DeepSeek Harness ${SUPPORTED_DSH_LINE}, found ${installed}. ` +
-      `Upgrade or downgrade @deepseek-ai/dsh to ${SUPPORTED_DSH_LINE}, or use a dshx release built for ${installed}.`
+  const compatible = installed === SUPPORTED_DSH_LINE;
+  if (!compatible && !dshLineWarned) {
+    dshLineWarned = true;
+    notify(
+      `[dshx] running against untested official DeepSeek Harness ${installed} ` +
+      `(tested line: ${SUPPORTED_DSH_LINE}); proceeding — report oddities upstream if any appear`
     );
   }
-  return installed;
+  return { installed, supported: SUPPORTED_DSH_LINE, compatible };
 }
 
 function selectedProfile(explicit) {
@@ -112,7 +118,7 @@ export function dshxRuntimeProfile({
   overlays = []
 } = {}) {
   const profileName = selectedProfile(explicitProfile);
-  const installedLine = assertSupportedDshInstallation(installAnchor);
+  reportDshLineCompatibility(installAnchor);
   healProfilesModuleFallback(installAnchor, home);
   const profile = loadProfile(DSH_PROFILE_BIN_NAME, profileName, installAnchor, home);
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME);
@@ -253,7 +259,7 @@ export const runtimeInternals = {
   PROFILE_ROOT_FILENAME,
   PROFILE_ROOT_CONFIG,
   SUPPORTED_DSH_LINE,
-  assertSupportedDshInstallation,
+  reportDshLineCompatibility,
   installationAnchor,
   selectedProfile,
   profileHome,
