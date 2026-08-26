@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { dshxRuntimeEntries, dshxRuntimeProfile, runtimeInternals } from '../src/dsh/runtime-boot.mjs';
 
@@ -129,6 +129,31 @@ test('missing surface profile fails loud instead of silently composing nothing',
       () => dshxRuntimeProfile({ home }),
       /plugin|Cannot find|ENOENT|profile/i,
       'the official loadProfile contract refuses unknown profiles'
+    );
+  });
+});
+
+test('unsupported installed DSH lines fail loud with an actionable message', () => {
+  temporaryDshHome((home) => {
+    seedSurfaceProfile(home);
+    const fake = join(home, 'fake-dsh', 'package.json');
+    mkdirSync(dirname(fake), { recursive: true });
+    writeFileSync(fake, JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9-unheard-of' }));
+
+    assert.throws(
+      () => runtimeInternals.assertSupportedDshInstallation(fake),
+      (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return message.includes(runtimeInternals.SUPPORTED_DSH_LINE)
+          && message.includes('9.9.9-unheard-of')
+          && /Upgrade or downgrade/.test(message);
+      },
+      'the mismatch must name both the supported line and the found version'
+    );
+    // The supported line itself passes and reports the installation.
+    assert.equal(
+      runtimeInternals.assertSupportedDshInstallation(new URL('../node_modules/@deepseek-ai/dsh/package.json', import.meta.url)),
+      runtimeInternals.SUPPORTED_DSH_LINE
     );
   });
 });

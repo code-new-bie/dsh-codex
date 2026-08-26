@@ -1,6 +1,7 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   boot,
   composeEntries,
@@ -17,6 +18,12 @@ const NAME = 'dshx';
 const DSH_PROFILE_BIN_NAME = 'dsh';
 const DEFAULT_PROFILE = 'tui';
 const PROFILE_ROOT_FILENAME = 'cordis.yml';
+// The supported official DSH line. Single source of truth: the exact
+// @deepseek-ai/dsh peerDependency declared in this package manifest.
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const SUPPORTED_DSH_LINE = JSON.parse(
+  readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')
+).peerDependencies['@deepseek-ai/dsh'];
 // Match the official `dsh` launcher's profile-root contract: this file is only
 // the Loader/include base anchor. The real user-owned configuration is carried
 // by the profile's `cordis.patch.yml` plus `$DSH_HOME/cordis.patch.yml`.
@@ -31,6 +38,28 @@ const PROFILE_ROOT_CONFIG = `# DSHX uses the same empty profile root contract as
 
 function installationAnchor() {
   return createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json');
+}
+
+/**
+ * Fail loud when the installed official DSH line is not the one this surface
+ * is built and tested against. The manifest pin alone is declarative —
+ * profile installs never resolve peers — so compatibility must be checked
+ * against the copy that will actually boot.
+ */
+export function assertSupportedDshInstallation(anchor = installationAnchor()) {
+  let installed;
+  try {
+    installed = JSON.parse(readFileSync(anchor, 'utf8')).version;
+  } catch (error) {
+    throw new Error(`dshx: cannot read the official DSH installation at ${anchor}: ${error instanceof Error ? error.message : error}`);
+  }
+  if (installed !== SUPPORTED_DSH_LINE) {
+    throw new Error(
+      `dshx supports official DeepSeek Harness ${SUPPORTED_DSH_LINE}, found ${installed}. ` +
+      `Upgrade or downgrade @deepseek-ai/dsh to ${SUPPORTED_DSH_LINE}, or use a dshx release built for ${installed}.`
+    );
+  }
+  return installed;
 }
 
 function selectedProfile(explicit) {
@@ -83,6 +112,7 @@ export function dshxRuntimeProfile({
   overlays = []
 } = {}) {
   const profileName = selectedProfile(explicitProfile);
+  const installedLine = assertSupportedDshInstallation(installAnchor);
   healProfilesModuleFallback(installAnchor, home);
   const profile = loadProfile(DSH_PROFILE_BIN_NAME, profileName, installAnchor, home);
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME);
@@ -222,6 +252,8 @@ export const runtimeInternals = {
   DEFAULT_PROFILE,
   PROFILE_ROOT_FILENAME,
   PROFILE_ROOT_CONFIG,
+  SUPPORTED_DSH_LINE,
+  assertSupportedDshInstallation,
   installationAnchor,
   selectedProfile,
   profileHome,
