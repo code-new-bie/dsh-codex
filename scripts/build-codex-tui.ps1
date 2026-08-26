@@ -10,6 +10,8 @@ $OutDir = if ($env:DSHX_TUI_OUT_DIR) { $env:DSHX_TUI_OUT_DIR } else { Join-Path 
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $env:CARGO_TARGET_DIR = $TargetDir
+# Ship without debug info: smaller artifacts, identical behavior.
+if (-not $env:CARGO_PROFILE_RELEASE_DEBUG) { $env:CARGO_PROFILE_RELEASE_DEBUG = '0' }
 cargo build --manifest-path (Join-Path $CodeXDir 'codex-rs\Cargo.toml') --locked --release -p codex-tui --bin codex-tui
 cargo build --manifest-path (Join-Path $CodeXDir 'codex-rs\Cargo.toml') --locked --release -p codex-stdio-to-uds --bin dshx-ipc-bridge
 $TuiSource = Join-Path $TargetDir 'release\codex-tui.exe'
