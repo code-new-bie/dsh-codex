@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   boot,
@@ -36,8 +36,47 @@ const PROFILE_ROOT_CONFIG = `# DSHX uses the same empty profile root contract as
 // own; launcher patches stay limited to installation-equivalent environment
 // wiring (agent preset roots, telemetry switch).
 
+/**
+ * Anchor at the user's INSTALLED DeepSeek Harness whenever one exists: the
+ * `dsh` on their PATH is the same build that powers their other surfaces and
+ * wrote their state files, so composition, healing and row resolution must
+ * ride that build. The repository's npm closure is only a fallback for fresh
+ * checkouts/CI without a global installation. DSHX_INSTALL_ANCHOR overrides.
+ */
+function dshExecutableOnPath(environment = process.env) {
+  const names = process.platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh'] : ['dsh'];
+  for (const directory of (environment.PATH || '').split(delimiter)) {
+    if (!directory) continue;
+    for (const name of names) {
+      const candidate = join(directory, name);
+      try {
+        readFileSync(candidate);
+        return candidate;
+      } catch { /* not here */ }
+    }
+  }
+  return undefined;
+}
+
 function installationAnchor() {
-  return createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json');
+  if (process.env.DSHX_INSTALL_ANCHOR) return process.env.DSHX_INSTALL_ANCHOR;
+  try {
+    return createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json');
+  } catch { /* fall through to PATH discovery below */ }
+  const executable = dshExecutableOnPath();
+  if (executable) {
+    let directory = dirname(resolve(executable));
+    for (;;) {
+      const manifest = join(directory, 'package.json');
+      try {
+        if (JSON.parse(readFileSync(manifest, 'utf8')).name === '@deepseek-ai/dsh') return manifest;
+      } catch { /* keep walking up */ }
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  throw new Error('dshx: cannot locate an official DeepSeek Harness installation; install @deepseek-ai/dsh or set DSHX_INSTALL_ANCHOR');
 }
 
 /**

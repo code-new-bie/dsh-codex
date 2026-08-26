@@ -25,14 +25,32 @@ export function profileManifestPath(profileName, environment = process.env) {
 }
 
 /**
- * How to invoke the official dsh CLI: an explicit override wins, a global
- * `dsh` on PATH is next, and a dependency-local `lib/bin.js` (always present
- * after npm ci) keeps CI and fresh checkouts working without any global
- * installation.
+ * How to invoke the official dsh CLI. Host fidelity first: a `dsh` on the
+ * user's PATH IS their installed DeepSeek Harness (same build that powers
+ * their other surfaces and wrote their state files), so it always wins.
+ * Only when none exists do we fall back to the dependency-local CLI from
+ * npm ci — fresh machines and CI.
  */
+function isExecutable(candidate) {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return fs.existsSync(candidate);
+  } catch {
+    return false;
+  }
+}
+
 export function resolveDshInvocation(fromDirectory = process.cwd(), environment = process.env) {
   if (environment.DSHX_DSH_BIN) {
     return { command: process.execPath, args: [environment.DSHX_DSH_BIN] };
+  }
+  const extensions = process.platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh'] : ['dsh'];
+  for (const directory of (environment.PATH || '').split(path.delimiter)) {
+    if (!directory) continue;
+    for (const name of extensions) {
+      const candidate = path.join(directory, name);
+      if (isExecutable(candidate)) return { command: candidate, args: [] };
+    }
   }
   try {
     const anchor = createRequire(path.join(fromDirectory, 'package.json')).resolve(
@@ -41,7 +59,7 @@ export function resolveDshInvocation(fromDirectory = process.cwd(), environment 
     const cli = path.join(path.dirname(anchor), 'lib', 'bin.js');
     if (fs.existsSync(cli)) return { command: process.execPath, args: [cli] };
   } catch {
-    // Not installed locally; fall through to PATH lookup.
+    // Not installed locally; fall through to bare PATH lookup.
   }
   return { command: 'dsh', args: [] };
 }

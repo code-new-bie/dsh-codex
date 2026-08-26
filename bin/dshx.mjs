@@ -189,7 +189,7 @@ async function doctor() {
     harnessDetail = probe.detail;
     harnessOk = probe.ok;
   } else {
-    harnessDetail = 'skipped: packaged IPC bridge missing';
+    harnessDetail = 'skipped: surface profile unavailable';
   }
 
   const rows = [
