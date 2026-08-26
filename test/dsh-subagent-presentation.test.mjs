@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dshThreadFromSnapshot } from '../src/dsh/codex-shapes.mjs';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
+import { dshThreadFromSnapshot } from '../src/tui-protocol/shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 function childAgent() {
   return {

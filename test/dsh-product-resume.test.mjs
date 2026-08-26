@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 function adapterFixture() {
   const adapter = Object.create(DshxPresentationAdapter.prototype);

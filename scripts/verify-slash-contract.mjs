@@ -72,7 +72,7 @@ for (const hidden of dshxHidden) {
 }
 
 const adapterSources = [
-  'src/dsh/presentation-adapter.mjs'
+  'src/tui-protocol/adapter.mjs'
 ].map((relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8')).join('\n');
 for (const [command, methods] of runtimeBacked) {
   for (const method of methods) {

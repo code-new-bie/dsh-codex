@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
-import { decodeDshModel } from '../src/dsh/codex-shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
+import { decodeDshModel } from '../src/tui-protocol/shapes.mjs';
 
 function fixture() {
   const sent = [];

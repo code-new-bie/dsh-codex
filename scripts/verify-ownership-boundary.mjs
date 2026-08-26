@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 function read(path) {
   return readFileSync(path, 'utf8');
@@ -83,23 +83,33 @@ for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) 
 }
 requireText('src/dsh/user-shell.mjs', 'agent: controller.agent');
 requireText('src/dsh/workspace-command.mjs', 'agent');
-requireText('src/dsh/presentation-adapter.mjs', "case 'command/exec'");
+requireText('src/tui-protocol/adapter.mjs', "case 'command/exec'");
 
 requireText('src/dsh/host-api.mjs', '@deepseek-ai/dsh-host-apiproxy');
 requireText('src/dsh/host-api.mjs', 'api.sessions.fork');
-requireText('src/dsh/presentation-adapter.mjs', 'executeDshCommand');
+requireText('src/tui-protocol/adapter.mjs', 'executeDshCommand');
 requireText('src/dsh/commands.mjs', 'commands.execute');
-forbidText('src/dsh/presentation-adapter.mjs', 'compactNow');
+forbidText('src/tui-protocol/adapter.mjs', 'compactNow');
 forbidText('src/dsh/agent-driver.mjs', /seedLength|parentSession|dshForkSeed/, 'shadow fork/session seed state');
 // The unified adapter may read DSH's durable `parentSession` header field to
 // delegate subagent interruption back to ctx.subagents, but it must never
 // keep shadow fork/session seed state of its own.
-forbidText('src/dsh/presentation-adapter.mjs', /seedLength|dshForkSeed/, 'shadow fork/session seed state');
-requireText('src/dsh/presentation-adapter.mjs', 'subagents.interrupt');
+forbidText('src/tui-protocol/adapter.mjs', /seedLength|dshForkSeed/, 'shadow fork/session seed state');
+requireText('src/tui-protocol/adapter.mjs', 'subagents.interrupt');
 forbidText('src/dsh/agent-driver.mjs', 'fork(sourceAgent');
 
 forbidText('src/dsh/local-server.mjs', 'WebSocketServer', 'production TCP WebSocket server');
 requireText('src/dsh/local-server.mjs', 'unix://');
 requireText('scripts/build-codex-tui.sh', 'dshx-ipc-bridge');
+
+// The Codex dialect lives only in the protocol namespace; domain modules in
+// src/dsh stay DSH-vocabulary (gradual cleanup tracked for residual field
+// mappings, enforced structurally by these two placement checks).
+try { readFileSync('src/tui-protocol/shapes.mjs'); readFileSync('src/tui-protocol/adapter.mjs'); } catch {
+  throw new Error('Codex protocol dictionary must live under src/tui-protocol/');
+}
+for (const entry of readdirSync('src/dsh')) {
+  if (/codex/i.test(entry)) throw new Error(`src/dsh must not carry codex-named modules; found ${entry}`);
+}
 
 console.log('DSHX ownership boundary verified');

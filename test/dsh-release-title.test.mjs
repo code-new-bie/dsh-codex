@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 import { foldDshSessionTitle } from '../src/dsh/thread-title.mjs';
 
 test('durable title fold is latest-wins over DSH session/title events', () => {

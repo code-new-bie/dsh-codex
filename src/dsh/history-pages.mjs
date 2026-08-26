@@ -1,4 +1,4 @@
-import { dshTurnsFromSession } from './codex-shapes.mjs';
+import { dshTurnsFromSession } from '../tui-protocol/shapes.mjs';
 
 function cursorOffset(cursor) {
   if (cursor == null) return 0;

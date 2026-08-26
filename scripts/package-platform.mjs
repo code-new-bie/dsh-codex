@@ -56,6 +56,7 @@ function copy(relative) {
 copy('bin/dshx.mjs');
 copy('src/cli');
 copy('src/dsh');
+copy('src/tui-protocol');
 copy('src/protocol');
 copy('README.md');
 copy('NOTICE');
@@ -101,6 +102,7 @@ const packageJson = {
     'bin/dshx.mjs',
     'src/cli',
     'src/dsh',
+    'src/tui-protocol',
     'src/protocol',
     'cordis.patch.yml',
     'dist/bin',

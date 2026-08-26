@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encodeDshModel } from '../src/dsh/codex-shapes.mjs';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
+import { encodeDshModel } from '../src/tui-protocol/shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 test('thread/loaded/list returns thread ids rather than thread maps', () => {
   const adapter = Object.create(DshxPresentationAdapter.prototype);

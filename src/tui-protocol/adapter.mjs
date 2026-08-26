@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { DshAgentDriver } from './agent-driver.mjs';
-import { DshApprovalBridge } from './approval-bridge.mjs';
+import { DshAgentDriver } from '../dsh/agent-driver.mjs';
+import { DshApprovalBridge } from '../dsh/approval-bridge.mjs';
 import {
   codexModelsFromDsh,
   decodeDshModel,
@@ -11,21 +11,21 @@ import {
   encodeDshModel,
   normalizeCodexEffort,
   normalizeSessionHeaders
-} from './codex-shapes.mjs';
-import { executeDshCommand } from './commands.mjs';
-import { dshThreadItemsPage, dshThreadTurnsPage } from './history-pages.mjs';
-import { DshHostApi } from './host-api.mjs';
-import { codexPlanTarget, threadSettingsUpdatedNotification } from './plan-presentation.mjs';
-import { DshPermissionView } from './permissions.mjs';
-import { codexForkAtSeq } from './session-fork.mjs';
-import { dshSkillsListEntry } from './skills.mjs';
-import { foldDshSessionTitle, threadNameUpdatedNotification } from './thread-title.mjs';
-import { DshThreadController } from './thread-controller.mjs';
-import { codexInputToDshContent, dshContentText } from './user-input.mjs';
-import { DshUserQuestionBridge } from './user-question-bridge.mjs';
-import { DshUserShellBridge } from './user-shell.mjs';
-import { persistedTokenUsageNotification } from './token-usage.mjs';
-import { DshWorkspaceCommandBridge } from './workspace-command.mjs';
+} from './shapes.mjs';
+import { executeDshCommand } from '../dsh/commands.mjs';
+import { dshThreadItemsPage, dshThreadTurnsPage } from '../dsh/history-pages.mjs';
+import { DshHostApi } from '../dsh/host-api.mjs';
+import { codexPlanTarget, threadSettingsUpdatedNotification } from '../dsh/plan-presentation.mjs';
+import { DshPermissionView } from '../dsh/permissions.mjs';
+import { codexForkAtSeq } from '../dsh/session-fork.mjs';
+import { dshSkillsListEntry } from '../dsh/skills.mjs';
+import { foldDshSessionTitle, threadNameUpdatedNotification } from '../dsh/thread-title.mjs';
+import { DshThreadController } from '../dsh/thread-controller.mjs';
+import { codexInputToDshContent, dshContentText } from '../dsh/user-input.mjs';
+import { DshUserQuestionBridge } from '../dsh/user-question-bridge.mjs';
+import { DshUserShellBridge } from '../dsh/user-shell.mjs';
+import { persistedTokenUsageNotification } from '../dsh/token-usage.mjs';
+import { DshWorkspaceCommandBridge } from '../dsh/workspace-command.mjs';
 import { UiRequestBroker } from '../protocol/request-broker.mjs';
 
 const INVALID_REQUEST = -32600;

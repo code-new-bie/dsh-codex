@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dshTurnsFromSession } from '../src/dsh/codex-shapes.mjs';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
+import { dshTurnsFromSession } from '../src/tui-protocol/shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 import { DshSessionProjector } from '../src/dsh/session-projector.mjs';
 
 const event = (type, data, time, seq = 0) => ({ type, data, time, seq });

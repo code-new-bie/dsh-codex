@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { DshxPresentationAdapter } from './presentation-adapter.mjs';
+import { DshxPresentationAdapter } from '../tui-protocol/adapter.mjs';
 import { bootDshxRuntime } from './runtime-boot.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');

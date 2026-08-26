@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { DshxPresentationAdapter } from '../src/dsh/presentation-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 function bareAdapter() {
   const adapter = Object.create(DshxPresentationAdapter.prototype);
