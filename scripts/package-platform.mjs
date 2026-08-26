@@ -90,13 +90,14 @@ const packageJson = {
   cpu: [arch],
   engines: rootPackage.engines,
   bin: { dshx: './bin/dshx.mjs' },
-  // The staged CLI must keep its bundle identity: the launcher bootstraps the
-  // surface profile by installing this very directory via `dsh plugin add`.
+  // Bundle flavor: host services stay peers so profile installs never pull
+  // stateful runtime copies (single-instance rule) nor trip pnpm build-script
+  // gates; only leaf parser libraries ship as real dependencies. Binaries are
+  // embedded below via dist/bin, resolved as file paths at runtime.
   exports: rootPackage.exports,
   dsh: rootPackage.dsh,
-  // Runtime host services ride as peers in the repo manifest but must be real
-  // dependencies of the installable CLI closure.
-  dependencies: { ...(rootPackage.dependencies ?? {}), ...(rootPackage.peerDependencies ?? {}) },
+  peerDependencies: rootPackage.peerDependencies,
+  dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
     'bin/dshx.mjs',
@@ -146,6 +147,7 @@ shrinkwrapRoot.cpu = packageJson.cpu;
 shrinkwrapRoot.engines = packageJson.engines;
 shrinkwrapRoot.bin = packageJson.bin;
 shrinkwrapRoot.dependencies = packageJson.dependencies;
+shrinkwrapRoot.peerDependencies = packageJson.peerDependencies ?? {};
 delete shrinkwrapRoot.devDependencies;
 const shrinkwrapPath = path.join(stage, 'npm-shrinkwrap.json');
 fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
@@ -176,7 +178,10 @@ const packOutput = execFileSync(
   { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
 );
 const packed = JSON.parse(packOutput);
-const filename = packed[0]?.filename;
+// npm <10 returns a top-level array; newer npm keys the record by package
+// name (mandatory for scoped names like @code-new-bie/dshx-tui).
+const packRecord = Array.isArray(packed) ? packed[0] : packed[Object.keys(packed)[0]];
+const filename = packRecord?.filename;
 if (!filename) throw new Error(`npm pack did not return a filename: ${packOutput}`);
 const sourceTarball = path.join(out, filename);
 const targetTarball = path.join(out, `dshx-${version}-${platform}-${arch}.tgz`);
