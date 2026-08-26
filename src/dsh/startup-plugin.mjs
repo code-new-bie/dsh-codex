@@ -50,7 +50,13 @@ export function resolveLaunchDescriptor(environment = process.env) {
     version: resolveVersion(),
     tuiCommand: resolvePackagedBinary('dshx-tui', environment.DSHX_TUI_BIN),
     bridgeCommand: resolvePackagedBinary('dshx-ipc-bridge', environment.DSHX_IPC_BRIDGE_BIN),
-    debug: environment.DSHX_DEBUG === '1'
+    debug: environment.DSHX_DEBUG === '1',
+    // Only launching contexts with TUI-correct signal semantics (a launcher
+    // that leaves SIGINT to the TUI) may take over the terminal; the official
+    // dsh CLI maps SIGINT to composition shutdown, so bare `dsh --profile tui`
+    // stays a passive endpoint provider by design.
+    attach: environment.DSHX_ATTACH === '1' && !environment.DSHX_HEADLESS,
+    headless: environment.DSHX_HEADLESS === '1'
   };
 }
 

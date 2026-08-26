@@ -148,7 +148,7 @@ test('untested DSH lines warn once and proceed; the tested line stays silent', (
     assert.equal(first.installed, '9.9.9-unheard-of');
     runtimeInternals.reportDshLineCompatibility(fake, (m) => warnings.push(m));
     assert.equal(warnings.length, 1, 'warn-once per process');
-    assert.match(warnings[0], new RegExp(`${runtimeInternals.SUPPORTED_DSH_LINE}.*9\\.9\\.9-unheard-of|9\\.9\\.9-unheard-of.*${runtimeInternals.SUPPORTED_DSH_LINE}`));
+    assert.match(warnings[0], new RegExp(`${runtimeInternals.TESTED_DSH_LINE}.*9\\.9\\.9-unheard-of|9\\.9\\.9-unheard-of.*${runtimeInternals.TESTED_DSH_LINE}`));
     assert.match(warnings[0], /proceeding/);
 
     // The tested line itself is silent and reports plain compatibility.

@@ -5,7 +5,10 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { DshxPresentationAdapter } from '../tui-protocol/adapter.mjs';
-import { bootDshxRuntime } from './runtime-boot.mjs';
+// Intentionally NO import of runtime-boot here: this module is loaded inside
+// the user's DSH installation via the profile loader, so pulling any harness
+// build from our own package would fork the runtime into two builds. Hosts
+// that need self-booting inject `bootRuntime` explicitly (tests, dev tooling).
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const READY = 'ready';
@@ -185,14 +188,14 @@ export async function startDshxLocalServer({
   home,
   version = '0.1.0-dev',
   runtime,
-  bootRuntime = bootDshxRuntime,
   Adapter = DshxPresentationAdapter,
   log = () => {},
   bridgeCommand = packagedBridgeBinary(),
   bridgeArgs,
   spawnBridge = spawn,
   socketRoot,
-  disposeRuntimeOnClose = true
+  disposeRuntimeOnClose = true,
+  bootRuntime
 } = {}) {
   const rendezvousRoot = path.resolve(socketRoot ?? defaultSocketRoot({ home }));
   let socketDirectory;
@@ -223,6 +226,9 @@ export async function startDshxLocalServer({
     socketDirectory = createSocketDirectory(rendezvousRoot);
     socketPath = path.join(socketDirectory, 's');
     assertSocketPathSupported(socketPath);
+    if (!ctx && typeof bootRuntime !== 'function') {
+      throw new Error('startDshxLocalServer requires either a runtime Context or an injected bootRuntime');
+    }
     ctx ??= await bootRuntime({ cwd });
     const args = bridgeArgs ?? [socketPath];
     bridge = spawnBridge(bridgeCommand, args, {

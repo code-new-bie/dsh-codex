@@ -72,10 +72,17 @@ forbidText('src/dsh/runtime-boot.mjs', 'bootDshxPresentationRuntime');
 // delegated to Cordis/DSH root-fiber ownership rather than a DSHX runtime.
 requireText('src/dsh/runtime-boot.mjs', 'ctx.fiber.dispose()');
 requireText('src/dsh/runtime-boot.mjs', 'attachPresentationLifetime(ctx)');
-// The declared supported DSH line is ecosystem-honest metadata: warn once at
+// The declared tested DSH line is ecosystem-honest metadata: warn once at
 // boot, never block the host (official bundles carry peer ranges, no gates).
 requireText('src/dsh/runtime-boot.mjs', 'reportDshLineCompatibility');
 requireText('src/dsh/runtime-boot.mjs', 'proceeding');
+// Host-version agnosticism: the production launcher and row modules must not
+// import harness builds from our package — at runtime everything rides the
+// user's installed DSH via the profile loader and its healed fallback.
+forbidText('bin/dshx.mjs', /(?:from\s+|import\s+\(\s*|require\()\s*["']@deepseek-ai\//, 'importing harness builds');
+forbidText('src/dsh/presentation-plugin.mjs', 'runtime-boot');
+forbidText('src/dsh/local-server.mjs', "from './runtime-boot.mjs'");
+requireText('src/dsh/startup-plugin.mjs', 'DSHX_ATTACH');
 
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');

@@ -18,12 +18,12 @@ const NAME = 'dshx';
 const DSH_PROFILE_BIN_NAME = 'dsh';
 const DEFAULT_PROFILE = 'tui';
 const PROFILE_ROOT_FILENAME = 'cordis.yml';
-// The supported official DSH line. Single source of truth: the exact
-// @deepseek-ai/dsh peerDependency declared in this package manifest.
+// The official DSH line this surface was built and tested against. Kept as an
+// explicit constant (not derived from the advisory peer range) so the
+// warn-once compatibility notice stays exact while the peer declaration can
+// express an adoption-friendly floor.
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const SUPPORTED_DSH_LINE = JSON.parse(
-  readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')
-).peerDependencies['@deepseek-ai/dsh'];
+const TESTED_DSH_LINE = '0.1.0-rc.8';
 // Match the official `dsh` launcher's profile-root contract: this file is only
 // the Loader/include base anchor. The real user-owned configuration is carried
 // by the profile's `cordis.patch.yml` plus `$DSH_HOME/cordis.patch.yml`.
@@ -55,17 +55,17 @@ export function reportDshLineCompatibility(
   try {
     installed = JSON.parse(readFileSync(anchor, 'utf8')).version;
   } catch {
-    return { installed: undefined, supported: SUPPORTED_DSH_LINE, compatible: undefined };
+    return { installed: undefined, supported: TESTED_DSH_LINE, compatible: undefined };
   }
-  const compatible = installed === SUPPORTED_DSH_LINE;
+  const compatible = installed === TESTED_DSH_LINE;
   if (!compatible && !dshLineWarned) {
     dshLineWarned = true;
     notify(
       `[dshx] running against untested official DeepSeek Harness ${installed} ` +
-      `(tested line: ${SUPPORTED_DSH_LINE}); proceeding — report oddities upstream if any appear`
+      `(tested line: ${TESTED_DSH_LINE}); proceeding — report oddities upstream if any appear`
     );
   }
-  return { installed, supported: SUPPORTED_DSH_LINE, compatible };
+  return { installed, supported: TESTED_DSH_LINE, compatible };
 }
 
 function selectedProfile(explicit) {
@@ -258,7 +258,7 @@ export const runtimeInternals = {
   DEFAULT_PROFILE,
   PROFILE_ROOT_FILENAME,
   PROFILE_ROOT_CONFIG,
-  SUPPORTED_DSH_LINE,
+  TESTED_DSH_LINE,
   reportDshLineCompatibility,
   installationAnchor,
   selectedProfile,

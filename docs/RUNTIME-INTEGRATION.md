@@ -6,7 +6,10 @@ DSHX reuses the same architectural seam that official DeepSeek Harness uses for 
 
 The TUI remains project-owned. DeepSeek Harness remains upstream-owned.
 
-Supported DSH package line for the current release branch: `0.1.0-rc.8`.
+Tested official DSH line for the current release branch: `0.1.0-rc.8`. The
+plugin is host-version agnostic at runtime — it composes inside whatever
+DeepSeek Harness installation hosts the profile, and an untested line only
+produces a one-shot startup warning (never a block).
 Pinned DSH source reference: `141eb6fef83422698aef7a981029e843e8161534`.
 
 The official runtime owns Agent creation/resume, Session persistence, model selection/routing, tools, approvals, permission policy, skills, subagents and every other capability surface. DSHX generalizes only the **presentation lifetime** from a headless/one-shot consumer into an interactive terminal frontend.
