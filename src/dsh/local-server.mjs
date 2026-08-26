@@ -1,3 +1,4 @@
+import process from 'node:process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -208,6 +209,13 @@ export async function startDshxLocalServer({
   let closePromise;
   let stderr = '';
 
+  // Exceptional transport events are always visible on stderr (never gated by
+  // the debug flag): they are the diagnosability lifeline when a TUI reports
+  // a protocol timeout.
+  const transportFault = (message) => {
+    process.stderr.write(`[dshx] ${message}\n`);
+  };
+
   const send = (message) => {
     if (!bridge?.stdin?.writable) throw new Error('DSHX IPC bridge stdin is not writable');
     bridge.stdin.write(`${JSON.stringify(message)}\n`);
@@ -217,7 +225,7 @@ export async function startDshxLocalServer({
       send(message);
       return true;
     } catch (error) {
-      log(`IPC response send failed: ${error instanceof Error ? error.message : String(error)}`);
+      transportFault(`IPC response send failed: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   };
@@ -291,7 +299,7 @@ export async function startDshxLocalServer({
 
   bridge.on('error', (error) => log(`IPC bridge error: ${error.message}`));
   bridge.on('exit', (code, signal) => {
-    if (!closing) log(`IPC bridge exited unexpectedly (${signal ?? code ?? 'unknown'})`);
+    if (!closing) transportFault(`IPC bridge exited unexpectedly (${signal ?? code ?? 'unknown'})`);
   });
 
   const close = () => {
