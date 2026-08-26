@@ -2,6 +2,10 @@
   "name": "@code-new-bie/dshx-tui",
   "version": "0.0.0-m1",
   "description": "Codex-grade TUI surface bundle for official DeepSeek Harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/code-new-bie/dsh-codex.git"
+  },
   "private": true,
   "type": "module",
   "engines": {

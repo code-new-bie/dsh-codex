@@ -64,6 +64,11 @@ export async function apply(ctx, config = {}) {
     close: server.close,
     tuiCommand: launch.tuiCommand
   });
+
+  // Passive launches (bare `dsh --profile tui`, scripts, CI) would otherwise
+  // sit silently on a live endpoint; mirror the official web surface's
+  // printUrl precedent so the listening state is always visible.
+  process.stderr.write(`[dshx] surface listening at ${server.url} — start the interactive TUI with \`dshx\`\n`);
   return server.close;
 }
 
