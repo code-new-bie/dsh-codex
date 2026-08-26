@@ -56,6 +56,70 @@ function fail(message) {
   process.exitCode = 1;
 }
 
+/**
+ * Release-flavor proof: the published per-platform tarball must be a
+ * self-contained standard bundle — official install into a fresh profile,
+ * then loader activation with ZERO environment overrides, binaries resolving
+ * from the installed copy itself.
+ */
+async function verifyReleaseFlavor(tarball) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-release-e2e-'));
+  const home = path.join(work, 'home');
+  fs.mkdirSync(home, { recursive: true });
+  const envR = { ...process.env, DSH_HOME: home };
+  // Simulate a clean user environment: no dev overrides may leak in.
+  for (const key of ['DSHX_IPC_BRIDGE_BIN', 'DSHX_TUI_BIN', 'DSHX_TUI_ARGS', 'DSHX_ATTACH', 'DSHX_HEADLESS', 'DSH_TELEMETRY_DISABLED']) {
+    delete envR[key];
+  }
+  envR.npm_config_cache = path.join(work, 'npm-cache');
+  try {
+    const dsh = resolveDshInvocation(ROOT, envR);
+    const add = spawnSync(dsh.command, [...dsh.args, 'plugin', '--profile', PROFILE, 'add', tarball], {
+      cwd: work, env: envR, encoding: 'utf8'
+    });
+    if (add.status !== 0) throw new Error(`official add failed:\n${add.stderr || add.stdout}`);
+    const manifest = JSON.parse(fs.readFileSync(path.join(home, 'profiles', PROFILE, 'package.json'), 'utf8'));
+    if (!manifest.dsh?.profile?.bundles?.includes(NAME)) throw new Error('reconcile missed the bundle layer');
+
+    // Probe must be a real file: the hmr row resolves process.argv[1].
+    const probe = path.join(work, 'probe.mjs');
+    fs.writeFileSync(probe, `
+      import path from 'node:path';
+      const { bootDshxRuntime } = await import(${JSON.stringify(path.join(ROOT, 'src', 'dsh', 'runtime-boot.mjs'))});
+      const ctx = await bootDshxRuntime({ cwd: '/tmp', watch: false });
+      try {
+        const s = ctx.get('dshxStartup'), p = ctx.get('dshxPresentation'), fs = await import('node:fs');
+        const leafLibs = new Set(Object.keys(${JSON.stringify(PACKAGE.dependencies ?? {})}));
+        const pm = ${JSON.stringify(path.join(home, 'profiles', PROFILE, 'node_modules', '@deepseek-ai'))};
+        const shadowed = fs.existsSync(pm)
+          ? fs.readdirSync(pm).filter((e) => /^dsh(-|$)/.test(e) && !leafLibs.has('@deepseek-ai/' + e))
+          : [];
+        console.log(JSON.stringify({
+          url: p?.url ?? null,
+          bridgeCommand: s?.bridgeCommand ?? null,
+          bridgeFromInstalledCopy: typeof s?.bridgeCommand === 'string' && s.bridgeCommand.includes('profiles' + path.sep + 'tui' + path.sep + 'node_modules'),
+          bridgeExists: typeof s?.bridgeCommand === 'string' && fs.existsSync(s.bridgeCommand),
+          shadowed
+        }));
+      } finally { await ctx.dispose?.(); }
+    `.replace(/\n {6}/g, '\n'));
+    const run = spawnSync(process.execPath, [probe], { cwd: work, env: envR, encoding: 'utf8', timeout: 180_000 });
+    const lastLine = (run.stdout || '').trim().split('\n').pop();
+    let result;
+    try { result = JSON.parse(lastLine); } catch {
+      throw new Error(`release probe printed no JSON verdict (exit ${run.status}):\n${(run.stderr || '') + (run.stdout || '')}`);
+    }
+    if (!String(result.url || '').startsWith('unix://')) throw new Error(`release activation produced no endpoint: ${lastLine}`);
+    if (!result.bridgeFromInstalledCopy || !result.bridgeExists) {
+      throw new Error(`bridge did not resolve from the installed copy: ${result.bridgeCommand}`);
+    }
+    if (result.shadowed.length > 0) throw new Error(`stateful runtime copies shadowed: ${result.shadowed.join(', ')}`);
+    console.log(`[verify-bundle] release ok: activated via ${tarball.split(path.sep).pop()} -> ${result.url}`);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
 try {
   // In-process boots must see the same DSH_HOME as the spawned CLI steps;
   // several official plugins (e.g. credentials) read the environment directly.
@@ -203,10 +267,25 @@ try {
     await ctx.dispose?.();
   }
 
-  console.log('\n[verify-bundle] ALL CHECKS PASSED');
 } catch (error) {
   fail(error instanceof Error ? error.stack : String(error));
   console.error(`[verify-bundle] temp workspace preserved for inspection: ${work}`);
 } finally {
   if (!process.exitCode) fs.rmSync(work, { recursive: true, force: true });
+}
+
+// Release flavor: when a packaged artifact exists, prove the published
+// tarball itself installs and activates with zero environment overrides.
+if (!process.exitCode) {
+  const releaseDir = path.join(ROOT, 'dist', 'release');
+  const tarballs = fs.existsSync(releaseDir)
+    ? fs.readdirSync(releaseDir).filter((f) => f.startsWith('dshx-') && f.endsWith('.tgz')).sort()
+    : [];
+  if (tarballs.length === 0) {
+    console.log('[verify-bundle] release flavor: skipped (build one via scripts/package-platform.mjs)');
+    if (process.env.DSHX_REQUIRE_RELEASE === '1') process.exitCode = 1;
+  } else {
+    await verifyReleaseFlavor(path.join(releaseDir, tarballs.at(-1)));
+  }
+  if (!process.exitCode) console.log('[verify-bundle] ALL CHECKS PASSED');
 }

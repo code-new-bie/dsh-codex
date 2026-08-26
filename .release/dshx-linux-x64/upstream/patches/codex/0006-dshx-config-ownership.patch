@@ -1,0 +1,13 @@
+diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
+--- a/codex-rs/tui/src/app/event_dispatch.rs
++++ b/codex-rs/tui/src/app/event_dispatch.rs
+@@ -1518,7 +1518,8 @@ impl App {
+                 self.sync_active_thread_service_tier_to_cached_session()
+                     .await;
+ 
+-                if let Some(default_effort) = default_effort.as_ref()
++                if !crate::dshx_backend()
++                    && let Some(default_effort) = default_effort.as_ref()
+                     && let Err(err) = crate::config_update::write_config_batch(
+                         app_server.request_handle(),
+                         crate::config_update::build_model_selection_edits(
