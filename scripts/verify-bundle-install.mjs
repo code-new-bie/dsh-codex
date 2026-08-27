@@ -16,6 +16,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const NAME = PACKAGE.name;
 const PROFILE = 'tui';
+const HOST_SETTLE_GRACE_MS = Number(process.env.DSHX_BUNDLE_HOST_SETTLE_GRACE_MS ?? 250);
 
 function fail(message) {
   console.error(`\n[verify-bundle] FAIL: ${message}`);
@@ -42,10 +43,12 @@ async function probeStdioSurface({ dsh, cwd, env, profile = PROFILE, timeoutMs =
     let stderr = '';
     let initialized;
     let settled = false;
+    let settleTimer;
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(settleTimer);
       lines.close();
       if (error) {
         try { child.kill('SIGTERM'); } catch {}
@@ -69,7 +72,13 @@ async function probeStdioSurface({ dsh, cwd, env, profile = PROFILE, timeoutMs =
       }
       initialized = message.result;
       child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
-      child.stdin.end();
+      // initialize proves the bundle rows are mounted. rc.8's official
+      // runProfile() then completes launcher-owned patch-watcher setup, which
+      // intentionally has no plugin-facing settle service. Exercise steady-
+      // state EOF only after that bounded host-only startup window.
+      settleTimer = setTimeout(() => {
+        if (!settled && !child.stdin.destroyed) child.stdin.end();
+      }, HOST_SETTLE_GRACE_MS);
     });
     child.on('exit', (code, signal) => {
       if (!initialized) {

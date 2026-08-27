@@ -1,0 +1,114 @@
+diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-client/src/stdio.rs
+--- a/codex-rs/app-server-client/src/stdio.rs
++++ b/codex-rs/app-server-client/src/stdio.rs
+@@ -320,8 +320,10 @@ impl StdioAppServerRequestHandle {
+     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+-        let request = jsonrpc_request_from_client_request(request);
++        self.request_json_rpc(jsonrpc_request_from_client_request(request)).await
++    }
++    pub async fn request_json_rpc(&self, request: JSONRPCRequest) -> IoResult<RequestResult> {
+         let (response_tx, response_rx) = oneshot::channel();
+         self.command_tx.send(StdioClientCommand::Request { request: Box::new(request), response_tx }).await
+             .map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server worker is closed"))?;
+         response_rx.await.map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio request response channel is closed"))?
+     }
+diff --git a/codex-rs/tui/src/app_server_session/fs.rs b/codex-rs/tui/src/app_server_session/fs.rs
+--- a/codex-rs/tui/src/app_server_session/fs.rs
++++ b/codex-rs/tui/src/app_server_session/fs.rs
+@@ -128,6 +128,22 @@ impl AppServerSession {
+                 })?)
+                 .wrap_err_with(|| format!("{method} returned invalid data"))
+             }
++            AppServerRequestHandle::Stdio(handle) => {
++                let response = handle
++                    .request_json_rpc(JSONRPCRequest {
++                        id: request_id,
++                        method: method.to_string(),
++                        params: Some(remote_params()),
++                        trace: None,
++                    })
++                    .await
++                    .wrap_err_with(|| format!("{method} failed in TUI"))?;
++                serde_json::from_value(response.map_err(|source| {
++                    color_eyre::eyre::eyre!("{method} failed in TUI: {}", source.message)
++                })?)
++                .wrap_err_with(|| format!("{method} returned invalid data"))
++            }
+             AppServerRequestHandle::InProcess(_) => {
+                 let path = AbsolutePathBuf::from_absolute_path_checked(path.as_str())
+                     .wrap_err_with(|| format!("invalid local app-server fs path {path}"))?;
+diff --git a/codex-rs/tui/src/status/remote_connection.rs b/codex-rs/tui/src/status/remote_connection.rs
+--- a/codex-rs/tui/src/status/remote_connection.rs
++++ b/codex-rs/tui/src/status/remote_connection.rs
+@@ -25,6 +25,7 @@ pub(crate) fn remote_connection_status_value(
+         RemoteAppServerEndpoint::UnixSocket { socket_path } => {
+             format!("unix://{}", socket_path.display())
+         }
++        RemoteAppServerEndpoint::StdioChild { .. } => return None,
+     };
+     let version = server_version
+         .map(|version| format!("v{version}"))
+diff --git a/codex-rs/tui/src/bottom_pane/approval_overlay.rs b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
+--- a/codex-rs/tui/src/bottom_pane/approval_overlay.rs
++++ b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
+@@ -787,7 +787,7 @@ struct ApprovalOption {
+ }
+ 
+ fn dshx_backend() -> bool {
+-    std::env::var_os("DSHX_APP_SERVER_ENDPOINT").is_some()
++    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
+ }
+ 
+ fn command_decision_to_review_decision(
+diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src/chatwidget/permission_popups.rs
+--- a/codex-rs/tui/src/chatwidget/permission_popups.rs
++++ b/codex-rs/tui/src/chatwidget/permission_popups.rs
+@@ -10,7 +10,7 @@ use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
+ 
+ fn dshx_backend() -> bool {
+-    std::env::var_os("DSHX_APP_SERVER_ENDPOINT").is_some()
++    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
+ }
+ 
+ impl ChatWidget {
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -237,7 +237,7 @@ const INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(/*mill
+ 
+ fn dshx_backend() -> bool {
+-    std::env::var_os("DSHX_APP_SERVER_ENDPOINT").is_some()
++    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
+ }
+ 
+ #[cfg(unix)]
+diff --git a/codex-rs/tui/src/app_server_session.rs b/codex-rs/tui/src/app_server_session.rs
+--- a/codex-rs/tui/src/app_server_session.rs
++++ b/codex-rs/tui/src/app_server_session.rs
+@@ -1664,7 +1664,7 @@ fn thread_start_params_from_config(
+     remote_cwd_override: Option<&std::path::Path>,
+     session_start_source: Option<ThreadStartSource>,
+ ) -> ThreadStartParams {
+-    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++    if crate::dshx_backend() {
+         return ThreadStartParams {
+             cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
+             ephemeral: Some(config.ephemeral),
+@@ -1713,7 +1713,7 @@ fn thread_resume_params_from_config(
+     remote_cwd_override: Option<&std::path::Path>,
+     model_settings: ResumeModelSettings,
+ ) -> ThreadResumeParams {
+-    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++    if crate::dshx_backend() {
+         return ThreadResumeParams {
+             thread_id: thread_id.to_string(),
+             ..ThreadResumeParams::default()
+@@ -1778,7 +1778,7 @@ fn thread_fork_params_from_config(
+     thread_params_mode: ThreadParamsMode,
+     remote_cwd_override: Option<&std::path::Path>,
+ ) -> ThreadForkParams {
+-    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {
++    if crate::dshx_backend() {
+         return ThreadForkParams {
+             thread_id: thread_id.to_string(),
+             ..ThreadForkParams::default()
