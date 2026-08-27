@@ -6,16 +6,13 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 /**
- * Shared bootstrap over the official DSH plugin machinery.
+ * Shared bootstrap over the official DSH profile/plugin machinery.
  *
- * The surface ships as a standard profile bundle; every entry point (the
- * zero-argument CLI, the smoke scripts, CI) ensures the selected profile
- * carries this exact package version by running the official
- * `dsh plugin --profile <p> add <packageRoot>` command, which owns profile
- * initialization, pnpm installation and bundles reconciliation.
+ * DSHX is a standard profile bundle. The UX launcher only ensures that the
+ * selected profile carries this exact bundle version; the official `dsh`
+ * process remains the application host and owns composition/lifecycle.
  */
 
-/** Resolve the DSH home directory exactly like the official launcher. */
 export function dshHomeDir(environment = process.env) {
   return environment.DSH_HOME || path.join(os.homedir(), '.dsh');
 }
@@ -24,59 +21,89 @@ export function profileManifestPath(profileName, environment = process.env) {
   return path.join(dshHomeDir(environment), 'profiles', profileName, 'package.json');
 }
 
-/**
- * How to invoke the official dsh CLI. Host fidelity first: a `dsh` on the
- * user's PATH IS their installed DeepSeek Harness (same build that powers
- * their other surfaces and wrote their state files), so it always wins.
- * Only when none exists do we fall back to the dependency-local CLI from
- * npm ci — fresh machines and CI.
- */
-function isExecutable(candidate) {
+function isExecutable(candidate, platform = process.platform) {
   try {
+    if (!fs.existsSync(candidate)) return false;
+    if (platform === 'win32') return true;
     fs.accessSync(candidate, fs.constants.X_OK);
-    return fs.existsSync(candidate);
+    return true;
   } catch {
     return false;
   }
 }
 
-export function resolveDshInvocation(fromDirectory = process.cwd(), environment = process.env) {
-  if (environment.DSHX_DSH_BIN) {
-    return { command: process.execPath, args: [environment.DSHX_DSH_BIN] };
-  }
-  const extensions = process.platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh'] : ['dsh'];
-  for (const directory of (environment.PATH || '').split(path.delimiter)) {
-    if (!directory) continue;
-    for (const name of extensions) {
-      const candidate = path.join(directory, name);
-      if (isExecutable(candidate)) return { command: candidate, args: [] };
-    }
-  }
+function dependencyCliFrom(directory) {
   try {
-    const anchor = createRequire(path.join(fromDirectory, 'package.json')).resolve(
-      '@deepseek-ai/dsh/package.json'
-    );
+    const anchor = createRequire(path.join(directory, 'package.json')).resolve('@deepseek-ai/dsh/package.json');
     const cli = path.join(path.dirname(anchor), 'lib', 'bin.js');
-    if (fs.existsSync(cli)) return { command: process.execPath, args: [cli] };
+    return fs.existsSync(cli) ? cli : undefined;
   } catch {
-    // Not installed locally; fall through to bare PATH lookup.
+    return undefined;
   }
-  return { command: 'dsh', args: [] };
-}
-
-/** A profile satisfies bootstrap when it pins this exact version as a bundle layer. */
-export function profileSatisfied(manifest, { name, version }) {
-  if (!manifest || typeof manifest !== 'object') return false;
-  const bundles = manifest.dsh?.profile?.bundles ?? [];
-  const dependencies = manifest.dependencies ?? {};
-  return dependencies[name] === version && bundles.includes(name);
 }
 
 /**
- * Ensure `profileName` exists and carries `{name}@{version}` from
- * `packageRoot` as an activated bundle layer. Idempotent: satisfied profiles
- * are left untouched, honoring DSHX_SKIP_PROFILE_BOOTSTRAP=1 for offline runs.
+ * Resolve the user's real DSH launcher. PATH wins. On Windows npm exposes a
+ * `dsh.cmd` shim; Rust/native children cannot execute batch files directly, so
+ * resolve that shim back to the same installation's JS bin and invoke it with
+ * the current Node executable. No shell command string is constructed.
  */
+export function resolveDshInvocation(
+  fromDirectory = process.cwd(),
+  environment = process.env,
+  platform = process.platform
+) {
+  if (environment.DSHX_DSH_BIN) {
+    return { command: process.execPath, args: [environment.DSHX_DSH_BIN] };
+  }
+
+  const names = platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh'] : ['dsh'];
+  for (const directory of (environment.PATH || '').split(path.delimiter)) {
+    if (!directory) continue;
+    for (const name of names) {
+      const candidate = path.join(directory, name);
+      if (!isExecutable(candidate, platform)) continue;
+      if (platform === 'win32' && name.toLowerCase().endsWith('.cmd')) {
+        const cli = dependencyCliFrom(directory);
+        if (!cli) {
+          throw new Error(`found ${candidate} but could not resolve the matching @deepseek-ai/dsh/lib/bin.js`);
+        }
+        return { command: process.execPath, args: [cli] };
+      }
+      return { command: candidate, args: [] };
+    }
+  }
+
+  const localCli = dependencyCliFrom(fromDirectory);
+  if (localCli) return { command: process.execPath, args: [localCli] };
+  return { command: 'dsh', args: [] };
+}
+
+/** Resolve the package version actually visible from one profile dependency tree. */
+export function installedProfilePackageVersion(profileName, packageName, environment = process.env) {
+  const manifestPath = profileManifestPath(profileName, environment);
+  try {
+    const packageJsonPath = createRequire(manifestPath).resolve(`${packageName}/package.json`);
+    const installed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    return typeof installed.version === 'string' ? installed.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Profile satisfaction is about installed state, not the dependency spec text:
+ * pnpm may record local/global installs as `link:`/`file:` while resolving the
+ * exact package version requested by the launcher.
+ */
+export function profileSatisfied(manifest, { name, version }, installedVersion = undefined) {
+  if (!manifest || typeof manifest !== 'object') return false;
+  const bundles = manifest.dsh?.profile?.bundles ?? [];
+  const dependencies = manifest.dependencies ?? {};
+  const resolvedVersion = installedVersion ?? (dependencies[name] === version ? version : undefined);
+  return dependencies[name] !== undefined && bundles.includes(name) && resolvedVersion === version;
+}
+
 export function ensureProfileInstalled({
   packageRoot,
   name,
@@ -87,28 +114,23 @@ export function ensureProfileInstalled({
 } = {}) {
   let satisfied = false;
   try {
-    satisfied = profileSatisfied(JSON.parse(fs.readFileSync(profileManifestPath(profile, environment), 'utf8')), {
-      name,
-      version
-    });
+    const manifest = JSON.parse(fs.readFileSync(profileManifestPath(profile, environment), 'utf8'));
+    const installedVersion = installedProfilePackageVersion(profile, name, environment);
+    satisfied = profileSatisfied(manifest, { name, version }, installedVersion);
   } catch {
-    // Missing or unreadable manifest: the official command initializes it.
+    // Missing/unreadable profile: the official plugin command initializes it.
   }
   if (satisfied) return { profile, action: 'already-installed' };
-  if (environment.DSHX_SKIP_PROFILE_BOOTSTRAP === '1') {
-    return { profile, action: 'skipped' };
-  }
+  if (environment.DSHX_SKIP_PROFILE_BOOTSTRAP === '1') return { profile, action: 'skipped' };
 
   const { command, args } = resolveDshInvocation(packageRoot, environment);
   const result = spawnSyncImpl(
     command,
     [...args, 'plugin', '--profile', profile, 'add', packageRoot],
-    { stdio: 'inherit', shell: process.platform === 'win32' }
+    { stdio: 'inherit', shell: false }
   );
   if (result.error?.code === 'ENOENT') {
-    throw new Error(
-      "official 'dsh' CLI not found (looked up DSHX_DSH_BIN, @deepseek-ai/dsh dependency and PATH); install DeepSeek Harness to manage the DSHX surface profile"
-    );
+    throw new Error("official 'dsh' CLI not found; install DeepSeek Harness to manage the DSHX profile");
   }
   if (result.status !== 0) {
     throw new Error(`failed to install ${name} into profile '${profile}' via dsh plugin add (exit ${result.status ?? '?'})`);

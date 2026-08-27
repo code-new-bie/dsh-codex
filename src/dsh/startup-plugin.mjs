@@ -1,18 +1,18 @@
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import z from '@deepseek-ai/schemastery';
 
 /**
- * dshx-startup — resolve the private app-server launch handshake supplied by
- * the official DSH launcher. The host owns argv and publishes the immutable
- * inner arguments through cmdlineArgs; this row only recognizes DSHX's private
- * stdio sentinel and publishes the presentation launch descriptor.
+ * dshx-startup — ordinary app-argument provider for the `tui` profile.
+ *
+ * The official DSH launcher owns argv and exposes the immutable inner arguments
+ * through `ctx.cmdlineArgs`. DSHX does not need a private app-server sentinel:
+ * `dsh --profile tui <args...>` is itself the surface invocation.
  */
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const APP_SERVER_ARG = '--dshx-app-server';
 let cachedVersion;
 
 export const name = 'dshx-startup';
@@ -24,33 +24,25 @@ export function resolveVersion() {
   return cachedVersion;
 }
 
-export function isStdioAppServerInvocation(cmdlineArgs = []) {
-  return Array.from(cmdlineArgs, String).includes(APP_SERVER_ARG);
-}
-
 export function resolveLaunchDescriptor(environment = process.env, cmdlineArgs = []) {
-  return {
+  return Object.freeze({
     cwd: process.cwd(),
     home: path.resolve(environment.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui')),
     version: resolveVersion(),
     debug: environment.DSHX_DEBUG === '1',
-    appServer: isStdioAppServerInvocation(cmdlineArgs)
-  };
+    tuiArgs: Object.freeze(Array.from(cmdlineArgs, String))
+  });
 }
 
 export function apply(ctx) {
   const cmdlineArgs = ctx.cmdlineArgs?.get?.() ?? [];
-  const launch = resolveLaunchDescriptor(process.env, cmdlineArgs);
-  fs.mkdirSync(launch.home, { recursive: true, mode: 0o700 });
-  ctx.provide('dshxStartup', launch);
+  ctx.provide('dshxStartup', resolveLaunchDescriptor(process.env, cmdlineArgs));
 }
 
 export const plugin = { name, inject, Config, apply };
 
 export const internals = {
-  APP_SERVER_ARG,
   PACKAGE_ROOT,
-  isStdioAppServerInvocation,
   resolveLaunchDescriptor,
   resolveVersion
 };

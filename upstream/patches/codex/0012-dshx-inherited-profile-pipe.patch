@@ -1,0 +1,194 @@
+diff --git a/codex-rs/app-server-client/Cargo.toml b/codex-rs/app-server-client/Cargo.toml
+--- a/codex-rs/app-server-client/Cargo.toml
++++ b/codex-rs/app-server-client/Cargo.toml
+@@
+ serde = { workspace = true }
+ serde_json = { workspace = true }
+-tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process"] }
++libc = { workspace = true }
++tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process", "fs"] }
+ tokio-tungstenite = { workspace = true }
+diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-client/src/stdio.rs
+--- a/codex-rs/app-server-client/src/stdio.rs
++++ b/codex-rs/app-server-client/src/stdio.rs
+@@
+ use std::io::Error as IoError;
+ use std::io::ErrorKind;
+ use std::io::Result as IoResult;
+-use std::process::Stdio;
++use std::fs::File as StdFile;
++use std::pin::Pin;
++#[cfg(unix)]
++use std::os::fd::FromRawFd;
++#[cfg(windows)]
++use std::os::windows::io::FromRawHandle;
+@@
++use tokio::fs::File as TokioFile;
+ use tokio::io::AsyncBufReadExt;
++use tokio::io::AsyncRead;
++use tokio::io::AsyncWrite;
+ use tokio::io::AsyncWriteExt;
+ use tokio::io::BufReader;
+-use tokio::process::ChildStdin;
+-use tokio::process::Command;
+@@
+ const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
++
++type BoxReader = Pin<Box<dyn AsyncRead + Send>>;
++type BoxWriter = Pin<Box<dyn AsyncWrite + Send>>;
+@@
+ pub struct StdioAppServerConnectArgs {
+-    pub command: Vec<String>,
++    pub fd: i32,
+@@
+ impl StdioAppServerClient {
+     pub async fn connect(args: StdioAppServerConnectArgs) -> IoResult<Self> {
+-        let executable = args.command.first().filter(|value| !value.is_empty()).ok_or_else(|| {
+-            IoError::new(ErrorKind::InvalidInput, "stdio app-server command must not be empty")
+-        })?;
+-        let mut command = Command::new(executable);
+-        command
+-            .args(&args.command[1..])
+-            .stdin(Stdio::piped())
+-            .stdout(Stdio::piped())
+-            .stderr(Stdio::inherit())
+-            .kill_on_drop(true);
+-        let mut child = command.spawn().map_err(|err| {
+-            IoError::new(
+-                err.kind(),
+-                format!("failed to spawn stdio app server `{executable}`: {err}"),
+-            )
+-        })?;
+-        let mut stdin = child.stdin.take().ok_or_else(|| {
+-            IoError::new(ErrorKind::BrokenPipe, "stdio app-server stdin was not piped")
+-        })?;
+-        let stdout = child.stdout.take().ok_or_else(|| {
+-            IoError::new(ErrorKind::BrokenPipe, "stdio app-server stdout was not piped")
+-        })?;
++        if args.fd < 3 {
++            return Err(IoError::new(ErrorKind::InvalidInput, "DSHX protocol fd must be >= 3"));
++        }
++        let stream = inherited_protocol_file(args.fd)?;
++        let reader = stream.try_clone()?;
++        let mut stdin: BoxWriter = Box::pin(TokioFile::from_std(stream));
++        let stdout: BoxReader = Box::pin(TokioFile::from_std(reader));
+         let mut lines = BufReader::new(stdout).lines();
+-        let endpoint = format!("stdio://{}", executable);
++        let endpoint = format!("fd://{}", args.fd);
+@@
+                             StdioClientCommand::Shutdown { response_tx } => {
+-                                let mut result = stdin.shutdown().await;
+-                                if result.is_ok() {
+-                                    result = match timeout(SHUTDOWN_TIMEOUT, child.wait()).await {
+-                                        Ok(Ok(_status)) => Ok(()),
+-                                        Ok(Err(err)) => Err(err),
+-                                        Err(_) => {
+-                                            let _ = child.kill().await;
+-                                            Err(IoError::new(
+-                                                ErrorKind::TimedOut,
+-                                                format!("timed out shutting down stdio app server `{endpoint}`"),
+-                                            ))
+-                                        }
+-                                    };
+-                                }
++                                let result = stdin.shutdown().await;
+                                 clean_shutdown = result.is_ok();
+                                 let _ = response_tx.send(result);
+                                 break;
+@@
+             if !clean_shutdown {
+                 let _ = stdin.shutdown().await;
+-                if child.try_wait().ok().flatten().is_none() {
+-                    let _ = child.kill().await;
+-                }
+             }
+@@
+ async fn initialize_stdio_connection(
+-    stdin: &mut ChildStdin,
+-    lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
++    stdin: &mut BoxWriter,
++    lines: &mut tokio::io::Lines<BufReader<BoxReader>>,
+@@
+-async fn write_jsonrpc_line(stdin: &mut ChildStdin, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
++async fn write_jsonrpc_line(stdin: &mut BoxWriter, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
+@@
+ fn deliver_event(event_tx: &mpsc::UnboundedSender<AppServerEvent>, event: AppServerEvent) -> IoResult<()> {
+     event_tx.send(event).map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server event consumer is closed"))
+ }
++
++#[cfg(unix)]
++fn inherited_protocol_file(fd: i32) -> IoResult<StdFile> {
++    // fd ownership is intentionally transferred to the app-server client; the
++    // TUI is the only consumer of the inherited DSHX protocol descriptor.
++    Ok(unsafe { StdFile::from_raw_fd(fd) })
++}
++
++#[cfg(windows)]
++fn inherited_protocol_file(fd: i32) -> IoResult<StdFile> {
++    let handle = unsafe { libc::_get_osfhandle(fd) };
++    if handle == -1 {
++        return Err(IoError::last_os_error());
++    }
++    Ok(unsafe { StdFile::from_raw_handle(handle as std::os::windows::io::RawHandle) })
++}
+diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
+--- a/codex-rs/tui/src/main.rs
++++ b/codex-rs/tui/src/main.rs
+@@
+-        let dshx_command_json = std::env::var("DSHX_APP_SERVER_CMD").map_err(|_| {
+-            anyhow::anyhow!(
+-                "DSHX_APP_SERVER_CMD is required; DSHX never falls back to the Codex agent runtime"
+-            )
+-        })?;
+-        let dshx_command: Vec<String> = serde_json::from_str(&dshx_command_json)
+-            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_CMD JSON: {err}"))?;
+-        if dshx_command.is_empty() || dshx_command[0].is_empty() {
+-            anyhow::bail!("DSHX_APP_SERVER_CMD must contain a non-empty executable argv[0]");
+-        }
++        let dshx_fd: i32 = std::env::var("DSHX_APP_SERVER_FD")
++            .map_err(|_| anyhow::anyhow!("DSHX_APP_SERVER_FD is required; DSHX never falls back to the Codex agent runtime"))?
++            .parse()
++            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_FD: {err}"))?;
++        if dshx_fd < 3 {
++            anyhow::bail!("DSHX_APP_SERVER_FD must be an inherited descriptor >= 3");
++        }
+         let dshx_endpoint = RemoteAppServerEndpoint::StdioChild {
+-            command: dshx_command,
++            command: vec![format!("fd:{dshx_fd}")],
+         };
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@
+ fn dshx_backend() -> bool {
+-    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
+ }
+@@
+         RemoteAppServerEndpoint::StdioChild { command } => {
++            let fd = command
++                .first()
++                .and_then(|value| value.strip_prefix("fd:"))
++                .and_then(|value| value.parse::<i32>().ok())
++                .ok_or_else(|| color_eyre::eyre::eyre!("invalid inherited DSHX protocol fd endpoint"))?;
+             let app_server = StdioAppServerClient::connect(StdioAppServerConnectArgs {
+-                command,
++                fd,
+                 client_name,
+                 client_version,
+diff --git a/codex-rs/tui/src/bottom_pane/approval_overlay.rs b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
+--- a/codex-rs/tui/src/bottom_pane/approval_overlay.rs
++++ b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
+@@
+ fn dshx_backend() -> bool {
+-    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
+ }
+diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src/chatwidget/permission_popups.rs
+--- a/codex-rs/tui/src/chatwidget/permission_popups.rs
++++ b/codex-rs/tui/src/chatwidget/permission_popups.rs
+@@
+ fn dshx_backend() -> bool {
+-    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
+ }

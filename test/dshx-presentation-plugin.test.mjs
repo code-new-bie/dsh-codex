@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -8,14 +10,14 @@ import {
   Config,
   plugin,
   internals,
-  SERVICE_KEY
+  SERVICE_KEY,
+  constants
 } from '../src/dsh/presentation-plugin.mjs';
 import {
   name as startupName,
   inject as startupInject,
   Config as startupConfig,
-  plugin as startupPlugin,
-  internals as startupInternals
+  plugin as startupPlugin
 } from '../src/dsh/startup-plugin.mjs';
 
 const LAUNCH = {
@@ -23,20 +25,37 @@ const LAUNCH = {
   home: '/home/test/.dshx/codex-tui',
   version: 'test',
   debug: true,
-  appServer: true
+  tuiArgs: ['resume', '--last']
 };
+
+function tick() { return new Promise((resolve) => setImmediate(resolve)); }
+
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdio = [null, null, null, new PassThrough()];
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killed = false;
+  child.kill = () => { child.killed = true; return true; };
+  return child;
+}
 
 function fakeContext(launch = LAUNCH, onExit = () => {}) {
   const provided = new Map();
+  let loaderAwaited = 0;
   const ctx = {
     dshxStartup: launch,
     provide: (key, value) => provided.set(key, value),
-    get: (key) => key === 'appExit' ? onExit : undefined
+    get: (key) => {
+      if (key === 'appExit') return onExit;
+      if (key === 'loader') return { await: async () => { loaderAwaited += 1; } };
+      return undefined;
+    }
   };
-  return { ctx, provided };
+  return { ctx, provided, loaderAwaited: () => loaderAwaited };
 }
 
-test('both rows expose named Cordis plugin contracts', () => {
+test('startup and presentation expose ordinary Cordis plugin contracts', () => {
   assert.equal(startupName, 'dshx-startup');
   assert.deepEqual(startupInject, ['cmdlineArgs']);
   assert.equal(typeof startupConfig, 'function');
@@ -57,10 +76,10 @@ test('both rows expose named Cordis plugin contracts', () => {
   }
 });
 
-test('startup consumes the official cmdlineArgs service and selects stdio mode', () => {
+test('startup publishes the raw official profile arguments for the native TUI', () => {
   const provided = new Map();
   const ctx = {
-    cmdlineArgs: { get: () => ['--dshx-app-server'] },
+    cmdlineArgs: { get: () => ['resume', '--last'] },
     provide: (key, value) => provided.set(key, value)
   };
   const previous = process.env.DSHX_TUI_HOME;
@@ -69,54 +88,89 @@ test('startup consumes the official cmdlineArgs service and selects stdio mode',
     startupPlugin.apply(ctx);
     const launch = provided.get('dshxStartup');
     assert.equal(launch.home, '/tmp/dshx-launch-home');
-    assert.equal(launch.appServer, true);
-    assert.equal(launch.version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
-    assert.equal(startupInternals.isStdioAppServerInvocation(['--other']), false);
+    assert.deepEqual(launch.tuiArgs, ['resume', '--last']);
+    assert.equal('appServer' in launch, false);
     assert.equal('bridgeCommand' in launch, false);
-    assert.equal('tuiCommand' in launch, false);
+    assert.equal(launch.version, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   } finally {
     if (previous === undefined) delete process.env.DSHX_TUI_HOME;
     else process.env.DSHX_TUI_HOME = previous;
   }
 });
 
-test('presentation binds stdio directly to the live DSH Context and exits through appExit', async () => {
+test('presentation waits for Loader settlement, launches TUI with inherited fd3, and exits through appExit', async () => {
   const exits = [];
-  const { ctx, provided } = fakeContext(LAUNCH, (code) => exits.push(code));
-  const started = [];
-  let closed = 0;
-  const original = internals.startStdio;
-  internals.startStdio = (options) => {
-    started.push(options);
-    return { mode: 'stdio', close: async () => { closed += 1; } };
+  const { ctx, provided, loaderAwaited } = fakeContext(LAUNCH, (code) => exits.push(code));
+  const child = fakeChild();
+  const spawned = [];
+  const transports = [];
+  const originalSpawn = internals.spawnTui;
+  const originalTransport = internals.startTransport;
+  const previousTui = process.env.DSHX_TUI_BIN;
+  process.env.DSHX_TUI_BIN = fileURLToPath(new URL('../package.json', import.meta.url));
+  internals.spawnTui = (command, args, options) => {
+    spawned.push({ command, args, options });
+    return child;
+  };
+  internals.startTransport = (options) => {
+    transports.push(options);
+    return { mode: 'stdio', close: async () => {} };
   };
   try {
-    const dispose = await plugin.apply(ctx, {});
-    assert.equal(started.length, 1);
-    assert.equal(started[0].ctx, ctx, 'the row must use the already-mounted composition');
-    assert.equal(started[0].home, LAUNCH.home);
-    assert.equal(typeof started[0].onEof, 'function');
+    const dispose = plugin.apply(ctx, {});
+    assert.equal(typeof dispose, 'function');
+    assert.equal(spawned.length, 0, 'apply must return before loader.await() settles');
+    await tick();
+    assert.equal(loaderAwaited(), 1);
+    assert.equal(spawned.length, 1);
+    assert.deepEqual(spawned[0].args, LAUNCH.tuiArgs);
+    assert.deepEqual(spawned[0].options.stdio.slice(0, 3), ['inherit', 'inherit', 'inherit']);
+    assert.equal(spawned[0].options.env.DSHX_APP_SERVER_FD, String(constants.PROTOCOL_FD));
+    assert.equal(transports.length, 1);
+    assert.equal(transports[0].ctx, ctx, 'protocol adapter must use the live profile Context');
+    assert.equal(transports[0].input, child.stdio[3]);
+    assert.equal(transports[0].output, child.stdio[3]);
 
     const service = provided.get(SERVICE_KEY);
-    assert.equal(service.mode, 'stdio');
-    assert.equal(service.url, undefined);
-    assert.equal(typeof service.close, 'function');
+    assert.equal(service.mode, 'inherited-pipe');
+    assert.equal(service.fd, 3);
+    assert.deepEqual(exits, []);
 
-    started[0].onEof();
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    await tick();
     assert.deepEqual(exits, [0]);
     await dispose();
-    assert.equal(closed, 1);
   } finally {
-    internals.startStdio = original;
+    internals.spawnTui = originalSpawn;
+    internals.startTransport = originalTransport;
+    if (previousTui === undefined) delete process.env.DSHX_TUI_BIN;
+    else process.env.DSHX_TUI_BIN = previousTui;
   }
 });
 
-test('presentation rejects accidental non-app-server profile launches', async () => {
-  const { ctx } = fakeContext({ ...LAUNCH, appServer: false });
-  await assert.rejects(() => plugin.apply(ctx, {}), /launch it through `dshx`/);
-});
-
-test('presentation refuses contexts without the Cordis seams', async () => {
-  await assert.rejects(() => plugin.apply({}, {}), /requires a Cordis Context with provide/);
-  await assert.rejects(() => plugin.apply({ provide: () => {} }, {}), /requires the dshxStartup service/);
+test('disposal terminates a still-running TUI without requesting another host exit', async () => {
+  const exits = [];
+  const { ctx } = fakeContext(LAUNCH, (code) => exits.push(code));
+  const child = fakeChild();
+  const originalSpawn = internals.spawnTui;
+  const originalTransport = internals.startTransport;
+  const previousTui = process.env.DSHX_TUI_BIN;
+  process.env.DSHX_TUI_BIN = fileURLToPath(new URL('../package.json', import.meta.url));
+  internals.spawnTui = () => child;
+  internals.startTransport = () => ({ close: async () => {} });
+  try {
+    const dispose = plugin.apply(ctx, {});
+    await tick();
+    await dispose();
+    assert.equal(child.killed, true);
+    child.emit('exit', 0, null);
+    await tick();
+    assert.deepEqual(exits, []);
+  } finally {
+    internals.spawnTui = originalSpawn;
+    internals.startTransport = originalTransport;
+    if (previousTui === undefined) delete process.env.DSHX_TUI_BIN;
+    else process.env.DSHX_TUI_BIN = previousTui;
+  }
 });
