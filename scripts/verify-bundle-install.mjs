@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 /**
- * End-to-end proof that DSHX installs and activates as a real DSH profile
- * bundle, using only official machinery:
- *
- *   1. npm pack            -> platform-agnostic bundle tarball
- *   2. dsh plugin add      -> profile init + pnpm install + bundles reconcile
- *   3. dsh --dump-config   -> composed tree contains the surface rows
- *   4. bootDshxRuntime     -> loader activates the rows; services publish
- *   5. single-instance      -> profile copy never shadows healed symlinks
- *
- * Everything runs inside one temporary DSH_HOME; no global state is touched.
+ * End-to-end DSH bundle compliance proof using only official host machinery:
+ * npm pack -> dsh plugin add -> dsh --dump-config -> stdio initialize/EOF.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { resolveDshInvocation } from '../src/dsh/profile-bootstrap.mjs';
 
@@ -24,268 +17,185 @@ const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const NAME = PACKAGE.name;
 const PROFILE = 'tui';
 
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-bundle-e2e-'));
-const home = path.join(work, 'home');
-const packDir = path.join(work, 'pack');
-fs.mkdirSync(home, { recursive: true });
-fs.mkdirSync(packDir, { recursive: true });
-
-// Keep every toolchain cache inside the temp area so repeated runs stay hermetic.
-const isolatedEnv = {
-  ...process.env,
-  DSH_HOME: home,
-  npm_config_cache: path.join(work, 'npm-cache'),
-  XDG_CACHE_HOME: path.join(work, 'cache'),
-  XDG_DATA_HOME: path.join(work, 'data'),
-  XDG_STATE_HOME: path.join(work, 'state')
-};
-
-function run(label, command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd ?? ROOT,
-    env: isolatedEnv,
-    encoding: 'utf8',
-    ...(options.spawn ?? {})
-  });
-  if (result.status === 0 || !options.check) return result;
-  throw new Error(`${label} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);
-}
-
 function fail(message) {
   console.error(`\n[verify-bundle] FAIL: ${message}`);
   process.exitCode = 1;
 }
 
-/**
- * Release-flavor proof: the published per-platform tarball must be a
- * self-contained standard bundle — official install into a fresh profile,
- * then loader activation with ZERO environment overrides, binaries resolving
- * from the installed copy itself.
- */
-async function verifyReleaseFlavor(tarball) {
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-release-e2e-'));
+function run(command, args, { cwd = ROOT, env = process.env, check = true } = {}) {
+  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8' });
+  if (check && result.status !== 0) {
+    throw new Error(`${command} ${args.join(' ')} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);
+  }
+  return result;
+}
+
+async function probeStdioSurface({ dsh, cwd, env, profile = PROFILE, timeoutMs = 90_000 }) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(dsh.command, [...dsh.args, '--profile', profile, '--dshx-app-server'], {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity, terminal: false });
+    let stderr = '';
+    let initialized;
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      lines.close();
+      if (error) {
+        try { child.kill('SIGTERM'); } catch {}
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    };
+    const timer = setTimeout(() => {
+      finish(new Error(`stdio surface timed out after ${timeoutMs}ms${stderr ? `:\n${stderr}` : ''}`));
+    }, timeoutMs);
+    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-16384); });
+    child.on('error', (error) => finish(error));
+    lines.on('line', (line) => {
+      let message;
+      try { message = JSON.parse(line); } catch { return; }
+      if (message?.id !== 'verify-bundle') return;
+      if (message.error) {
+        finish(new Error(`stdio initialize rejected: ${message.error.message || JSON.stringify(message.error)}`));
+        return;
+      }
+      initialized = message.result;
+      child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
+      child.stdin.end();
+    });
+    child.on('exit', (code, signal) => {
+      if (!initialized) {
+        finish(new Error(`stdio surface exited before initialize (${signal ?? code ?? 'unknown'})${stderr ? `:\n${stderr}` : ''}`));
+        return;
+      }
+      if (code !== 0) {
+        finish(new Error(`stdio surface did not honor bounded EOF exit (code ${code ?? '?'} signal ${signal ?? '-'})${stderr ? `:\n${stderr}` : ''}`));
+        return;
+      }
+      finish(null, initialized);
+    });
+    child.stdin.write(`${JSON.stringify({
+      id: 'verify-bundle',
+      method: 'initialize',
+      params: { clientInfo: { name: 'dshx-bundle-verifier', version: PACKAGE.version } }
+    })}\n`);
+  });
+}
+
+function assertComposition(dumpText) {
+  return import('@deepseek-ai/dsh-app-boot').then(({ loadOptionalPatches }) => {
+    const temp = path.join(os.tmpdir(), `dshx-dump-${process.pid}-${Date.now()}.yml`);
+    fs.writeFileSync(temp, dumpText);
+    try {
+      const tree = loadOptionalPatches('dsh', temp);
+      const rows = [];
+      const walk = (node) => {
+        if (Array.isArray(node)) return node.forEach(walk);
+        if (!node || typeof node !== 'object') return;
+        if (typeof node.id === 'string') rows.push(node);
+        for (const value of Object.values(node)) walk(value);
+      };
+      walk(tree);
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      for (const id of ['dshx-startup', 'dshx-presentation']) {
+        if (!byId.has(id)) throw new Error(`composed tree is missing '${id}'`);
+      }
+      if (byId.get('headless-runner')?.disabled !== true) {
+        throw new Error('competing headless-runner must be disabled by the DSHX bundle patch');
+      }
+    } finally {
+      fs.rmSync(temp, { force: true });
+    }
+  });
+}
+
+function assertSingleRuntime(home) {
+  const ownLeafLibs = new Set(
+    Object.keys(PACKAGE.dependencies ?? {})
+      .filter((name) => name.startsWith('@deepseek-ai/dsh'))
+      .map((name) => name.slice('@deepseek-ai/'.length))
+  );
+  const profileModules = path.join(home, 'profiles', PROFILE, 'node_modules', '@deepseek-ai');
+  const shadowed = fs.existsSync(profileModules)
+    ? fs.readdirSync(profileModules)
+        .filter((entry) => /^dsh(-|$)/.test(entry))
+        .filter((entry) => !ownLeafLibs.has(entry))
+    : [];
+  if (shadowed.length > 0) {
+    throw new Error(`profile shadows stateful DSH runtime packages: ${shadowed.join(', ')}`);
+  }
+}
+
+async function verifyInstall(specifier, label) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), `dshx-${label}-e2e-`));
   const home = path.join(work, 'home');
   fs.mkdirSync(home, { recursive: true });
-  const envR = { ...process.env, DSH_HOME: home };
-  // Simulate a clean user environment: no dev overrides may leak in.
-  for (const key of ['DSHX_IPC_BRIDGE_BIN', 'DSHX_TUI_BIN', 'DSHX_TUI_ARGS', 'DSHX_ATTACH', 'DSHX_HEADLESS', 'DSH_TELEMETRY_DISABLED']) {
-    delete envR[key];
-  }
-  envR.npm_config_cache = path.join(work, 'npm-cache');
-  try {
-    const dsh = resolveDshInvocation(ROOT, envR);
-    const add = spawnSync(dsh.command, [...dsh.args, 'plugin', '--profile', PROFILE, 'add', tarball], {
-      cwd: work, env: envR, encoding: 'utf8'
-    });
-    if (add.status !== 0) throw new Error(`official add failed:\n${add.stderr || add.stdout}`);
-    const manifest = JSON.parse(fs.readFileSync(path.join(home, 'profiles', PROFILE, 'package.json'), 'utf8'));
-    if (!manifest.dsh?.profile?.bundles?.includes(NAME)) throw new Error('reconcile missed the bundle layer');
+  const env = {
+    ...process.env,
+    DSH_HOME: home,
+    npm_config_cache: path.join(work, 'npm-cache'),
+    XDG_CACHE_HOME: path.join(work, 'cache'),
+    XDG_DATA_HOME: path.join(work, 'data'),
+    XDG_STATE_HOME: path.join(work, 'state')
+  };
+  for (const key of [
+    'DSHX_APP_SERVER_CMD', 'DSHX_APP_SERVER_ENDPOINT', 'DSHX_APP_SERVER_TOKEN',
+    'DSHX_IPC_BRIDGE_BIN', 'DSHX_ATTACH', 'DSHX_HEADLESS', 'DSHX_TUI_ARGS'
+  ]) delete env[key];
 
-    // Probe must be a real file: the hmr row resolves process.argv[1].
-    const probe = path.join(work, 'probe.mjs');
-    fs.writeFileSync(probe, `
-      import path from 'node:path';
-      const { bootDshxRuntime } = await import(${JSON.stringify(path.join(ROOT, 'src', 'dsh', 'runtime-boot.mjs'))});
-      const ctx = await bootDshxRuntime({ cwd: '/tmp', watch: false });
-      try {
-        const s = ctx.get('dshxStartup'), p = ctx.get('dshxPresentation'), fs = await import('node:fs');
-        const leafLibs = new Set(Object.keys(${JSON.stringify(PACKAGE.dependencies ?? {})}));
-        const pm = ${JSON.stringify(path.join(home, 'profiles', PROFILE, 'node_modules', '@deepseek-ai'))};
-        const shadowed = fs.existsSync(pm)
-          ? fs.readdirSync(pm).filter((e) => /^dsh(-|$)/.test(e) && !leafLibs.has('@deepseek-ai/' + e))
-          : [];
-        console.log(JSON.stringify({
-          url: p?.url ?? null,
-          bridgeCommand: s?.bridgeCommand ?? null,
-          bridgeFromInstalledCopy: typeof s?.bridgeCommand === 'string' && s.bridgeCommand.includes('profiles' + path.sep + 'tui' + path.sep + 'node_modules'),
-          bridgeExists: typeof s?.bridgeCommand === 'string' && fs.existsSync(s.bridgeCommand),
-          shadowed
-        }));
-      } finally { await ctx.dispose?.(); }
-    `.replace(/\n {6}/g, '\n'));
-    const run = spawnSync(process.execPath, [probe], { cwd: work, env: envR, encoding: 'utf8', timeout: 180_000 });
-    const lastLine = (run.stdout || '').trim().split('\n').pop();
-    let result;
-    try { result = JSON.parse(lastLine); } catch {
-      throw new Error(`release probe printed no JSON verdict (exit ${run.status}):\n${(run.stderr || '') + (run.stdout || '')}`);
+  try {
+    const dsh = resolveDshInvocation(ROOT, env);
+    run(dsh.command, [...dsh.args, 'plugin', '--profile', PROFILE, 'add', specifier], {
+      cwd: path.dirname(specifier), env
+    });
+    const manifest = JSON.parse(fs.readFileSync(path.join(home, 'profiles', PROFILE, 'package.json'), 'utf8'));
+    if (!manifest.dsh?.profile?.bundles?.includes(NAME)) throw new Error('bundle reconcile did not activate DSHX');
+    if (manifest.dependencies?.[NAME] == null) throw new Error('profile manifest did not record DSHX dependency');
+
+    const dump = run(dsh.command, [...dsh.args, '--profile', PROFILE, '--dump-config'], { cwd: work, env });
+    await assertComposition(dump.stdout);
+    const initialized = await probeStdioSurface({ dsh, cwd: work, env });
+    if (!String(initialized?.userAgent ?? '').startsWith('dshx/')) {
+      throw new Error(`unexpected initialize identity: ${JSON.stringify(initialized)}`);
     }
-    if (!String(result.url || '').startsWith('unix://')) throw new Error(`release activation produced no endpoint: ${lastLine}`);
-    if (!result.bridgeFromInstalledCopy || !result.bridgeExists) {
-      throw new Error(`bridge did not resolve from the installed copy: ${result.bridgeCommand}`);
-    }
-    if (result.shadowed.length > 0) throw new Error(`stateful runtime copies shadowed: ${result.shadowed.join(', ')}`);
-    console.log(`[verify-bundle] release ok: activated via ${tarball.split(path.sep).pop()} -> ${result.url}`);
+    assertSingleRuntime(home);
+    console.log(`[verify-bundle] ${label} ok: official profile -> stdio -> ${initialized.userAgent}`);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
 }
 
 try {
-  // In-process boots must see the same DSH_HOME as the spawned CLI steps;
-  // several official plugins (e.g. credentials) read the environment directly.
-  process.env.DSH_HOME = home;
-
-  // Binaries ship with the companion CLI (dist/bin), not the bundle tarball;
-  // the documented environment overrides point the surface at them.
-  for (const [envName, fileName] of [
-    ['DSHX_IPC_BRIDGE_BIN', 'dshx-ipc-bridge'],
-    ['DSHX_TUI_BIN', 'dshx-tui']
-  ]) {
-    const candidate = path.join(ROOT, 'dist', 'bin', process.platform === 'win32' ? `${fileName}.exe` : fileName);
-    if (fs.existsSync(candidate)) process.env[envName] = candidate;
-  }
-
-  // ── 1. pack ────────────────────────────────────────────────────────────
-  const packed = run('npm pack', 'npm', ['pack', '--pack-destination', packDir, '--loglevel', 'error'], { check: true });
-  const tarballName = (packed.stdout.trim().split('\n').pop() || '').trim();
-  const tarball = path.join(packDir, tarballName);
-  if (!tarballName.endsWith('.tgz') || !fs.existsSync(tarball)) {
-    throw new Error(`npm pack did not produce a tarball: ${packed.stdout}`);
-  }
-  console.log(`[verify-bundle] packed ${tarballName}`);
-
-  // ── 2. official install into a brand-new profile ──────────────────────
-  const dsh = resolveDshInvocation(ROOT, isolatedEnv);
-  const add = run(
-    'dsh plugin add',
-    dsh.command,
-    [...dsh.args, 'plugin', '--profile', PROFILE, 'add', `./${tarballName}`],
-    { cwd: packDir, check: true }
-  );
-  if (!add.stdout.includes(`initialized profile ${PROFILE}`) && !add.stdout.includes('already')) {
-    // First use prints the init line; tolerate either shape but require success.
-    console.log('[verify-bundle] (profile init message not on stdout; continuing)');
-  }
-
-  const manifestPath = path.join(home, 'profiles', PROFILE, 'package.json');
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  const bundles = manifest.dsh?.profile?.bundles ?? [];
-  if (!bundles.includes(NAME)) {
-    fail(`reconcile did not append ${NAME} to dsh.profile.bundles: ${JSON.stringify(bundles)}`);
-    process.exit(process.exitCode || 1);
-  }
-  if (manifest.dependencies?.[NAME] == null) {
-    fail(`pnpm did not record ${NAME} in profile dependencies`);
-    process.exit(process.exitCode || 1);
-  }
-  console.log(`[verify-bundle] reconcile ok: bundles=${JSON.stringify(bundles)}`);
-
-  // ── 3. composed tree contains the surface rows ─────────────────────────
-  // --dump-config emits the composed tree as YAML in the same dialect as
-  // patch files (including !!js nodes), so we reuse DSH's own parser.
-  const { loadOptionalPatches } = await import('@deepseek-ai/dsh-app-boot');
-  const dumpPath = path.join(work, 'dump-config.yml');
-  const dump = run('dsh --dump-config', dsh.command, [...dsh.args, '--profile', PROFILE, '--dump-config']);
-  if (dump.status !== 0) {
-    throw new Error(`--dump-config failed: ${dump.stderr || dump.stdout}`);
-  }
-  fs.writeFileSync(dumpPath, dump.stdout);
-  let tree;
+  const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-source-pack-'));
   try {
-    tree = loadOptionalPatches('dsh', dumpPath);
-  } catch {
-    throw new Error(`--dump-config output did not parse as an entry list:\n${dump.stdout.slice(0, 2000)}`);
-  }
-  const flat = [];
-  const walk = (node) => {
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-    } else if (node && typeof node === 'object') {
-      if (typeof node.id === 'string') flat.push(node);
-      for (const value of Object.values(node)) {
-        if (Array.isArray(value) || (value && typeof value === 'object' && value.constructor === Object)) walk(value);
-      }
-    }
-  };
-  walk(tree);
-  const byId = new Map(flat.map((entry) => [entry.id, entry]));
-  for (const id of ['dshx-startup', 'dshx-presentation']) {
-    if (!byId.has(id)) {
-      fail(`composed tree is missing row '${id}'. Dumped ids: ${[...byId.keys()].join(', ')}`);
-      process.exit(process.exitCode || 1);
-    }
-  }
-  const headlessRunner = byId.get('headless-runner');
-  if (headlessRunner && headlessRunner.disabled !== true) {
-    fail('competing headless-runner row is present but not disabled');
-    process.exit(process.exitCode || 1);
-  }
-  console.log('[verify-bundle] dump-config ok: surface rows composed, locks applied');
-
-  // ── 4. real boot: loader activates rows and services publish ───────────
-  const { bootDshxRuntime } = await import('../src/dsh/runtime-boot.mjs');
-  let ctx;
-  try {
-    ctx = await bootDshxRuntime({ cwd: ROOT, home, watch: false });
-  } catch (error) {
-    // Surface the per-entry failures the AggregateError wraps.
-    const dump = (e, depth = 0) => {
-      if (!e || depth > 4) return;
-      const line = (e.message ?? String(e)).split('\n')[0];
-      console.error(`${'  '.repeat(depth)}- ${line}`);
-      if (Array.isArray(e.errors)) e.errors.forEach((sub) => dump(sub, depth + 1));
-      if (e.cause && e.cause !== e) dump(e.cause, depth + 1);
-    };
-    console.error('[verify-bundle] boot failure breakdown:');
-    dump(error);
-    throw error;
-  }
-  try {
-    const startup = ctx.get('dshxStartup');
-    const presentation = ctx.get('dshxPresentation');
-    if (!startup || startup.home !== path.resolve(process.env.DSHX_TUI_HOME || path.join(os.homedir(), '.dshx', 'codex-tui'))) {
-      throw new Error(`dshxStartup missing or unexpected home: ${JSON.stringify(startup)}`);
-    }
-    if (!presentation?.url?.startsWith('unix://')) {
-      throw new Error(`dshxPresentation missing or bad endpoint: ${JSON.stringify(presentation)}`);
-    }
-    if (!fs.existsSync(startup.bridgeCommand ?? '')) {
-      throw new Error('packaged bridge binary not found; build it before running this verifier');
-    }
-    console.log(`[verify-bundle] boot ok: transport live at ${presentation.url}`);
-
-    // ── 5. single-instance rule ──────────────────────────────────────────
-    // Leaf parser libraries declared as real dependencies (official bundle
-    // convention) may live in the profile; stateful runtime services must
-    // not — they would shadow the healed installation symlinks.
-    const ownLeafLibs = new Set(
-      Object.keys(PACKAGE.dependencies ?? {})
-        .filter((name) => name.startsWith('@deepseek-ai/dsh'))
-        .map((name) => name.slice('@deepseek-ai/'.length))
-    );
-    const profileModules = path.join(home, 'profiles', PROFILE, 'node_modules', '@deepseek-ai');
-    const shadowed = fs.existsSync(profileModules)
-      ? fs.readdirSync(profileModules)
-          .filter((entry) => /^dsh(-|$)/.test(entry))
-          .filter((entry) => !ownLeafLibs.has(entry))
-      : [];
-    if (shadowed.length > 0) {
-      throw new Error(`profile node_modules shadows stateful dsh runtime packages: ${shadowed.join(', ')}`);
-    }
-    console.log('[verify-bundle] single-instance ok: no stateful dsh runtime copies shadow the healed fallback');
+    const packed = run('npm', ['pack', '--pack-destination', packDir, '--loglevel', 'error']);
+    const name = packed.stdout.trim().split('\n').pop()?.trim();
+    if (!name?.endsWith('.tgz')) throw new Error(`npm pack returned no tarball: ${packed.stdout}`);
+    await verifyInstall(path.join(packDir, name), 'source bundle');
   } finally {
-    await ctx.dispose?.();
+    fs.rmSync(packDir, { recursive: true, force: true });
   }
 
+  const releaseDir = path.join(ROOT, 'dist', 'release');
+  const releases = fs.existsSync(releaseDir)
+    ? fs.readdirSync(releaseDir).filter((file) => file.startsWith('dshx-') && file.endsWith('.tgz')).sort()
+    : [];
+  if (releases.length > 0) {
+    await verifyInstall(path.join(releaseDir, releases.at(-1)), 'release bundle');
+  } else if (process.env.DSHX_REQUIRE_RELEASE === '1') {
+    throw new Error('release flavor required but no dist/release/dshx-*.tgz exists');
+  } else {
+    console.log('[verify-bundle] release flavor skipped (no platform artifact present)');
+  }
+  console.log('[verify-bundle] ALL CHECKS PASSED');
 } catch (error) {
   fail(error instanceof Error ? error.stack : String(error));
-  console.error(`[verify-bundle] temp workspace preserved for inspection: ${work}`);
-} finally {
-  if (!process.exitCode) fs.rmSync(work, { recursive: true, force: true });
-}
-
-// Release flavor: when a packaged artifact exists, prove the published
-// tarball itself installs and activates with zero environment overrides.
-if (!process.exitCode) {
-  const releaseDir = path.join(ROOT, 'dist', 'release');
-  const tarballs = fs.existsSync(releaseDir)
-    ? fs.readdirSync(releaseDir).filter((f) => f.startsWith('dshx-') && f.endsWith('.tgz')).sort()
-    : [];
-  if (tarballs.length === 0) {
-    console.log('[verify-bundle] release flavor: skipped (build one via scripts/package-platform.mjs)');
-    if (process.env.DSHX_REQUIRE_RELEASE === '1') process.exitCode = 1;
-  } else {
-    await verifyReleaseFlavor(path.join(releaseDir, tarballs.at(-1)));
-  }
-  if (!process.exitCode) console.log('[verify-bundle] ALL CHECKS PASSED');
 }
