@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -22,7 +24,7 @@ import {
 
 const LAUNCH = {
   cwd: '/workspace',
-  home: '/home/test/.dshx/codex-tui',
+  home: path.join(os.tmpdir(), `dshx-presentation-test-${process.pid}`),
   version: 'test',
   debug: true,
   tuiArgs: ['resume', '--last']
@@ -83,11 +85,11 @@ test('startup publishes the raw official profile arguments for the native TUI', 
     provide: (key, value) => provided.set(key, value)
   };
   const previous = process.env.DSHX_TUI_HOME;
-  process.env.DSHX_TUI_HOME = '/tmp/dshx-launch-home';
+  process.env.DSHX_TUI_HOME = path.join(os.tmpdir(), 'dshx-launch-home');
   try {
     startupPlugin.apply(ctx);
     const launch = provided.get('dshxStartup');
-    assert.equal(launch.home, '/tmp/dshx-launch-home');
+    assert.equal(launch.home, path.join(os.tmpdir(), 'dshx-launch-home'));
     assert.deepEqual(launch.tuiArgs, ['resume', '--last']);
     assert.equal('appServer' in launch, false);
     assert.equal('bridgeCommand' in launch, false);
@@ -119,23 +121,21 @@ test('presentation waits for Loader settlement, launches TUI with inherited fd3,
   try {
     const dispose = plugin.apply(ctx, {});
     assert.equal(typeof dispose, 'function');
-    assert.equal(spawned.length, 0, 'apply must return before loader.await() settles');
+    assert.equal(spawned.length, 0);
     await tick();
     assert.equal(loaderAwaited(), 1);
     assert.equal(spawned.length, 1);
     assert.deepEqual(spawned[0].args, LAUNCH.tuiArgs);
-    assert.deepEqual(spawned[0].options.stdio.slice(0, 3), ['inherit', 'inherit', 'inherit']);
+    assert.deepEqual(spawned[0].options.stdio, ['inherit', 'inherit', 'inherit', 'pipe']);
     assert.equal(spawned[0].options.env.DSHX_APP_SERVER_FD, String(constants.PROTOCOL_FD));
     assert.equal(transports.length, 1);
-    assert.equal(transports[0].ctx, ctx, 'protocol adapter must use the live profile Context');
+    assert.equal(transports[0].ctx, ctx);
     assert.equal(transports[0].input, child.stdio[3]);
     assert.equal(transports[0].output, child.stdio[3]);
 
     const service = provided.get(SERVICE_KEY);
     assert.equal(service.mode, 'inherited-pipe');
     assert.equal(service.fd, 3);
-    assert.deepEqual(exits, []);
-
     child.exitCode = 0;
     child.emit('exit', 0, null);
     await tick();

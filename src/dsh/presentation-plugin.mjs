@@ -47,10 +47,6 @@ export function resolveTuiBinary(environment = process.env, platform = process.p
   return path.join(PACKAGE_ROOT, 'dist', 'bin', platform === 'win32' ? 'dshx-tui.exe' : 'dshx-tui');
 }
 
-function protocolStdioMode(platform = process.platform) {
-  return platform === 'win32' ? 'overlapped' : 'pipe';
-}
-
 export const internals = {
   spawnTui: spawn,
   startTransport: startDshxStdioTransport
@@ -112,7 +108,10 @@ export function apply(ctx) {
         CODEX_HOME: launch.home,
         DSHX_APP_SERVER_FD: String(PROTOCOL_FD)
       },
-      stdio: ['inherit', 'inherit', 'inherit', protocolStdioMode()],
+      // fd 3 is an anonymous duplex pipe. Keep it synchronous on Windows too:
+      // the Rust client wraps the inherited handle in tokio::fs::File, whose
+      // blocking adapter works uniformly without FILE_FLAG_OVERLAPPED.
+      stdio: ['inherit', 'inherit', 'inherit', 'pipe'],
       windowsHide: false
     });
     state.child = child;

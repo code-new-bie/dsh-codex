@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const slashPatch = fs.readFileSync('upstream/patches/codex/0009-dshx-slash-capabilities.patch', 'utf8');
 const stdioModePatch = fs.readFileSync('upstream/patches/codex/0011-dshx-stdio-mode-detection.patch', 'utf8');
+const inheritedPipePatch = fs.readFileSync('upstream/patches/codex/0012-dshx-inherited-profile-pipe.patch', 'utf8');
 
 function hiddenCapabilityBlock() {
   const start = slashPatch.indexOf('+        if crate::dshx_backend()');
@@ -16,41 +17,35 @@ function hiddenCapabilityBlock() {
 test('DSH-backed daily commands remain visible in the Codex thin fork', () => {
   const hidden = hiddenCapabilityBlock();
   for (const command of ['Diff', 'Fork', 'Compact', 'Agents']) {
-    assert.equal(
-      hidden.includes(`SlashCommand::${command}`),
-      false,
-      `/${command.toLowerCase()} is DSH-backed and must not be hidden`
-    );
+    assert.equal(hidden.includes(`SlashCommand::${command}`), false);
   }
 });
 
 test('Codex-only runtime owners stay hidden from DSHX', () => {
   const hidden = hiddenCapabilityBlock();
   for (const command of ['AutoReview', 'Mcp', 'Plugins', 'Logout', 'MultiAgents']) {
-    assert.equal(
-      hidden.includes(`SlashCommand::${command}`),
-      true,
-      `/${command.toLowerCase()} must stay hidden until an equivalent DSH public seam is faithfully projected`
-    );
+    assert.equal(hidden.includes(`SlashCommand::${command}`), true);
   }
 });
 
-test('DSHX mode detection follows the stdio child command, never the removed socket endpoint', () => {
-  const oldNeedle = '-    std::env::var_os("DSHX_APP_SERVER_ENDPOINT").is_some()';
-  const newNeedle = '+    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()';
-  assert.equal(stdioModePatch.split(oldNeedle).length - 1, 3, 'all three legacy mode detectors must be replaced');
-  assert.equal(stdioModePatch.split(newNeedle).length - 1, 3, 'all three DSHX mode detectors must follow the stdio command env');
+test('final DSHX mode detection follows the inherited profile fd, never a backend command or socket endpoint', () => {
+  assert.equal(inheritedPipePatch.split('-    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()').length - 1, 3);
+  assert.equal(inheritedPipePatch.split('+    std::env::var_os("DSHX_APP_SERVER_FD").is_some()').length - 1, 3);
+  assert.match(inheritedPipePatch, /DSHX_APP_SERVER_FD is required/);
+  assert.doesNotMatch(inheritedPipePatch, /\+.*DSHX_APP_SERVER_ENDPOINT/);
 });
 
 test('DSH thread ownership is independent from Codex remote-workspace classification', () => {
   assert.equal(
     stdioModePatch.split('-    if crate::dshx_backend() && matches!(thread_params_mode, ThreadParamsMode::Remote) {').length - 1,
-    3,
-    'start/resume/fork must all remove the legacy Remote-mode gate'
+    3
   );
-  assert.equal(
-    stdioModePatch.split('+    if crate::dshx_backend() {').length - 1,
-    3,
-    'start/resume/fork must all remain DSH-owned while StdioChild is a LocalDaemon'
-  );
+  assert.equal(stdioModePatch.split('+    if crate::dshx_backend() {').length - 1, 3);
+});
+
+test('the final transport patch removes TUI-owned backend spawning', () => {
+  assert.match(inheritedPipePatch, /RemoteAppServerEndpoint::InheritedPipe/);
+  assert.match(inheritedPipePatch, /inherited_protocol_file/);
+  assert.match(inheritedPipePatch, /-        let mut command = Command::new\(executable\);/);
+  assert.doesNotMatch(inheritedPipePatch, /\+.*Command::new\(executable\)/);
 });

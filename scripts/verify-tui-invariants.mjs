@@ -23,22 +23,24 @@ const approval = '.upstream/codex/codex-rs/tui/src/bottom_pane/approval_overlay.
 const permissions = '.upstream/codex/codex-rs/tui/src/chatwidget/permission_popups.rs';
 
 for (const needle of [
-  'DSHX_APP_SERVER_CMD is required',
-  'RemoteAppServerEndpoint::StdioChild',
+  'DSHX_APP_SERVER_FD is required',
+  'RemoteAppServerEndpoint::InheritedPipe',
   'Some(dshx_endpoint)',
   'DSHX_RESUME_MODE',
 ]) requireText(main, needle);
-forbidText(main, 'DSHX_APP_SERVER_ENDPOINT', 'legacy socket endpoint transport');
-forbidText(main, 'DSHX_APP_SERVER_TOKEN', 'legacy bearer-token transport');
+for (const legacy of ['DSHX_APP_SERVER_CMD', 'DSHX_APP_SERVER_ENDPOINT', 'DSHX_APP_SERVER_TOKEN']) {
+  forbidText(main, legacy, `legacy backend transport ${legacy}`);
+}
 
 for (const needle of [
   'pub struct StdioAppServerClient',
-  'Command::new(executable)',
+  'inherited_protocol_file',
   'JSONRPCMessage',
   'stdin.shutdown()',
 ]) requireText(stdio, needle);
+forbidText(stdio, 'Command::new(', 'TUI must not spawn a DSH backend');
 requireText(client, 'Stdio(StdioAppServerClient)');
-requireText(lib, 'Some(endpoint @ RemoteAppServerEndpoint::StdioChild');
+requireText(lib, 'Some(endpoint @ RemoteAppServerEndpoint::InheritedPipe');
 requireText(lib, 'AppServerTarget::LocalDaemon { endpoint }');
 
 const legacyBridge = '.upstream/codex/codex-rs/stdio-to-uds/src/dshx_ipc_bridge.rs';
@@ -47,7 +49,8 @@ if (existsSync('src/dsh/local-server.mjs')) throw new Error('legacy Node socket 
 
 for (const path of [approval, permissions, lib]) {
   requireText(path, 'fn dshx_backend');
-  requireText(path, 'DSHX_APP_SERVER_CMD');
+  requireText(path, 'DSHX_APP_SERVER_FD');
+  forbidText(path, 'DSHX_APP_SERVER_CMD', 'child-backend DSHX detection');
   forbidText(path, 'DSHX_APP_SERVER_ENDPOINT', 'legacy socket-mode DSHX detection');
 }
 requireText('.upstream/codex/codex-rs/tui/src/history_cell/session.rs', 'DeepSeek Harness');
@@ -72,6 +75,17 @@ if (slashText.slice(hiddenStart, hiddenEnd).includes('SlashCommand::Diff')) {
   throw new Error('/diff must remain visible in DSHX');
 }
 
+const launcher = read('bin/dshx.mjs');
+requireText('bin/dshx.mjs', "'--profile', profile");
+forbidText('bin/dshx.mjs', 'DSHX_APP_SERVER_CMD', 'launcher must not create a backend child command');
+forbidText('bin/dshx.mjs', 'DSHX_APP_SERVER_FD', 'only the profile-owned presentation runner may publish the protocol fd');
+
+const presentation = read('src/dsh/presentation-plugin.mjs');
+if (!presentation.includes("stdio: ['inherit', 'inherit', 'inherit', 'pipe']")) {
+  throw new Error('presentation runner must preserve terminal fds 0/1/2 and reserve fd3 for the protocol pipe');
+}
+requireText('src/dsh/presentation-plugin.mjs', 'DSHX_APP_SERVER_FD');
+
 const pkg = JSON.parse(read('package.json'));
 if (pkg.dependencies?.ws) throw new Error('ws must not be a production dependency');
-console.log('DSHX pinned TUI stdio invariants verified');
+console.log('DSHX pinned TUI profile-owned fd3 invariants verified');

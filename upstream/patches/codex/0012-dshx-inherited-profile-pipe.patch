@@ -1,48 +1,55 @@
 diff --git a/codex-rs/app-server-client/Cargo.toml b/codex-rs/app-server-client/Cargo.toml
 --- a/codex-rs/app-server-client/Cargo.toml
 +++ b/codex-rs/app-server-client/Cargo.toml
-@@
- serde = { workspace = true }
+@@ -1,1 +1,2 @@
  serde_json = { workspace = true }
--tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process"] }
 +libc = { workspace = true }
-+tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process", "fs"] }
- tokio-tungstenite = { workspace = true }
+@@ -1,1 +1,1 @@
+-tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process"] }
++tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "fs"] }
+diff --git a/codex-rs/app-server-client/src/remote.rs b/codex-rs/app-server-client/src/remote.rs
+--- a/codex-rs/app-server-client/src/remote.rs
++++ b/codex-rs/app-server-client/src/remote.rs
+@@ -1,3 +1,3 @@
+-    StdioChild {
+-        command: Vec<String>,
++    InheritedPipe {
++        fd: i32,
+     },
+@@ -1,1 +1,1 @@
+-            RemoteAppServerEndpoint::StdioChild { .. } => Err(IoError::new(
++            RemoteAppServerEndpoint::InheritedPipe { .. } => Err(IoError::new(
 diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-client/src/stdio.rs
 --- a/codex-rs/app-server-client/src/stdio.rs
 +++ b/codex-rs/app-server-client/src/stdio.rs
-@@
- use std::io::Error as IoError;
- use std::io::ErrorKind;
- use std::io::Result as IoResult;
+@@ -1,1 +1,8 @@
 -use std::process::Stdio;
 +use std::fs::File as StdFile;
 +use std::pin::Pin;
 +#[cfg(unix)]
-+use std::os::fd::FromRawFd;
++use std::os::fd::BorrowedFd;
 +#[cfg(windows)]
-+use std::os::windows::io::FromRawHandle;
-@@
-+use tokio::fs::File as TokioFile;
++use std::os::windows::io::BorrowedHandle;
++#[cfg(windows)]
++use std::os::windows::io::RawHandle;
+@@ -1,1 +1,4 @@
  use tokio::io::AsyncBufReadExt;
++use tokio::fs::File as TokioFile;
 +use tokio::io::AsyncRead;
 +use tokio::io::AsyncWrite;
- use tokio::io::AsyncWriteExt;
- use tokio::io::BufReader;
+@@ -1,1 +0,0 @@
 -use tokio::process::ChildStdin;
+@@ -1,1 +0,0 @@
 -use tokio::process::Command;
-@@
+@@ -1,1 +1,4 @@
  const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 +
 +type BoxReader = Pin<Box<dyn AsyncRead + Send>>;
 +type BoxWriter = Pin<Box<dyn AsyncWrite + Send>>;
-@@
- pub struct StdioAppServerConnectArgs {
+@@ -1,1 +1,1 @@
 -    pub command: Vec<String>,
 +    pub fd: i32,
-@@
- impl StdioAppServerClient {
-     pub async fn connect(args: StdioAppServerConnectArgs) -> IoResult<Self> {
+@@ -1,31 +1,14 @@
 -        let executable = args.command.first().filter(|value| !value.is_empty()).ok_or_else(|| {
 -            IoError::new(ErrorKind::InvalidInput, "stdio app-server command must not be empty")
 -        })?;
@@ -75,7 +82,7 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
          let mut lines = BufReader::new(stdout).lines();
 -        let endpoint = format!("stdio://{}", executable);
 +        let endpoint = format!("fd://{}", args.fd);
-@@
+@@ -1,17 +1,2 @@
                              StdioClientCommand::Shutdown { response_tx } => {
 -                                let mut result = stdin.shutdown().await;
 -                                if result.is_ok() {
@@ -93,48 +100,45 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 -                                }
 +                                let result = stdin.shutdown().await;
                                  clean_shutdown = result.is_ok();
-                                 let _ = response_tx.send(result);
-                                 break;
-@@
+@@ -1,5 +1,2 @@
              if !clean_shutdown {
                  let _ = stdin.shutdown().await;
 -                if child.try_wait().ok().flatten().is_none() {
 -                    let _ = child.kill().await;
 -                }
              }
-@@
- async fn initialize_stdio_connection(
+@@ -1,2 +1,2 @@
 -    stdin: &mut ChildStdin,
 -    lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 +    stdin: &mut BoxWriter,
 +    lines: &mut tokio::io::Lines<BufReader<BoxReader>>,
-@@
+@@ -1,1 +1,1 @@
 -async fn write_jsonrpc_line(stdin: &mut ChildStdin, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
 +async fn write_jsonrpc_line(stdin: &mut BoxWriter, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
-@@
+@@ -1,3 +1,24 @@
  fn deliver_event(event_tx: &mpsc::UnboundedSender<AppServerEvent>, event: AppServerEvent) -> IoResult<()> {
      event_tx.send(event).map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server event consumer is closed"))
  }
 +
 +#[cfg(unix)]
 +fn inherited_protocol_file(fd: i32) -> IoResult<StdFile> {
-+    // fd ownership is intentionally transferred to the app-server client; the
-+    // TUI is the only consumer of the inherited DSHX protocol descriptor.
-+    Ok(unsafe { StdFile::from_raw_fd(fd) })
++    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
++    Ok(StdFile::from(borrowed.try_clone_to_owned()?))
 +}
 +
 +#[cfg(windows)]
 +fn inherited_protocol_file(fd: i32) -> IoResult<StdFile> {
-+    let handle = unsafe { libc::_get_osfhandle(fd) };
++    let handle = unsafe { libc::get_osfhandle(fd) };
 +    if handle == -1 {
 +        return Err(IoError::last_os_error());
 +    }
-+    Ok(unsafe { StdFile::from_raw_handle(handle as std::os::windows::io::RawHandle) })
++    let borrowed = unsafe { BorrowedHandle::borrow_raw(handle as RawHandle) };
++    Ok(StdFile::from(borrowed.try_clone_to_owned()?))
 +}
 diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 --- a/codex-rs/tui/src/main.rs
 +++ b/codex-rs/tui/src/main.rs
-@@
+@@ -1,14 +1,10 @@
 -        let dshx_command_json = std::env::var("DSHX_APP_SERVER_CMD").map_err(|_| {
 -            anyhow::anyhow!(
 -                "DSHX_APP_SERVER_CMD is required; DSHX never falls back to the Codex agent runtime"
@@ -144,51 +148,51 @@ diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 -            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_CMD JSON: {err}"))?;
 -        if dshx_command.is_empty() || dshx_command[0].is_empty() {
 -            anyhow::bail!("DSHX_APP_SERVER_CMD must contain a non-empty executable argv[0]");
--        }
 +        let dshx_fd: i32 = std::env::var("DSHX_APP_SERVER_FD")
 +            .map_err(|_| anyhow::anyhow!("DSHX_APP_SERVER_FD is required; DSHX never falls back to the Codex agent runtime"))?
 +            .parse()
 +            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_FD: {err}"))?;
 +        if dshx_fd < 3 {
 +            anyhow::bail!("DSHX_APP_SERVER_FD must be an inherited descriptor >= 3");
-+        }
-         let dshx_endpoint = RemoteAppServerEndpoint::StdioChild {
+         }
+-        let dshx_endpoint = RemoteAppServerEndpoint::StdioChild {
 -            command: dshx_command,
-+            command: vec![format!("fd:{dshx_fd}")],
++        let dshx_endpoint = RemoteAppServerEndpoint::InheritedPipe {
++            fd: dshx_fd,
          };
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
 --- a/codex-rs/tui/src/lib.rs
 +++ b/codex-rs/tui/src/lib.rs
-@@
- fn dshx_backend() -> bool {
--    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
-+    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
- }
-@@
-         RemoteAppServerEndpoint::StdioChild { command } => {
-+            let fd = command
-+                .first()
-+                .and_then(|value| value.strip_prefix("fd:"))
-+                .and_then(|value| value.parse::<i32>().ok())
-+                .ok_or_else(|| color_eyre::eyre::eyre!("invalid inherited DSHX protocol fd endpoint"))?;
+@@ -1,1 +1,1 @@
+-        RemoteAppServerEndpoint::StdioChild { .. } => false,
++        RemoteAppServerEndpoint::InheritedPipe { .. } => false,
+@@ -1,3 +1,3 @@
+-        RemoteAppServerEndpoint::StdioChild { command } => {
++        RemoteAppServerEndpoint::InheritedPipe { fd } => {
              let app_server = StdioAppServerClient::connect(StdioAppServerConnectArgs {
 -                command,
 +                fd,
-                 client_name,
-                 client_version,
+@@ -1,1 +1,1 @@
+-        Some(endpoint @ RemoteAppServerEndpoint::StdioChild { .. }) => {
++        Some(endpoint @ RemoteAppServerEndpoint::InheritedPipe { .. }) => {
+@@ -1,1 +1,1 @@
+-    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
+diff --git a/codex-rs/tui/src/status/remote_connection.rs b/codex-rs/tui/src/status/remote_connection.rs
+--- a/codex-rs/tui/src/status/remote_connection.rs
++++ b/codex-rs/tui/src/status/remote_connection.rs
+@@ -1,1 +1,1 @@
+-        RemoteAppServerEndpoint::StdioChild { .. } => return None,
++        RemoteAppServerEndpoint::InheritedPipe { .. } => return None,
 diff --git a/codex-rs/tui/src/bottom_pane/approval_overlay.rs b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
 --- a/codex-rs/tui/src/bottom_pane/approval_overlay.rs
 +++ b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
-@@
- fn dshx_backend() -> bool {
+@@ -1,1 +1,1 @@
 -    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
 +    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
- }
 diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src/chatwidget/permission_popups.rs
 --- a/codex-rs/tui/src/chatwidget/permission_popups.rs
 +++ b/codex-rs/tui/src/chatwidget/permission_popups.rs
-@@
- fn dshx_backend() -> bool {
+@@ -1,1 +1,1 @@
 -    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
 +    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
- }
