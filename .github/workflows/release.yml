@@ -76,6 +76,8 @@ jobs:
           node scripts/verify-dsh-closure.mjs
           npm test
           node scripts/verify-ownership-boundary.mjs
+      - name: Enable pnpm for official profile machinery
+        run: corepack enable pnpm
       - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
       - name: Build pinned TUI (Unix)
@@ -102,8 +104,6 @@ jobs:
         run: node test/tui_smoke_windows.mjs
       - name: Build installable platform tarball
         run: node scripts/package-platform.mjs
-      - name: Enable pnpm for official plugin machinery
-        run: corepack enable pnpm
       - name: Verify release bundle install and stdio activation
         env:
           DSHX_REQUIRE_RELEASE: '1'
