@@ -21,13 +21,14 @@ git -C "$DEST" clean -ffd >/dev/null
 
 for patch in "$ROOT"/upstream/patches/codex/*.patch; do
   [[ -e "$patch" ]] || continue
-  # The maintained thin-fork patches are intentionally hand-readable and may
-  # have stale hunk line counts after upstream rebases. Recount from the hunk
-  # bodies while still requiring every context line to match the pinned Codex.
-  # Keep verbose diagnostics enabled: when an upstream sync drifts, CI should
-  # print the exact context Git searched for rather than only a line number.
-  git -C "$DEST" apply --verbose --recount --check "$patch"
-  git -C "$DEST" apply --verbose --recount "$patch"
+  # The maintained thin-fork patches are intentionally compact and may carry
+  # fewer context lines than git-apply's traditional unified-diff minimum, as
+  # well as stale hunk line counts after upstream rebases. --unidiff-zero only
+  # permits that compact shape; every context line that is present must still
+  # match exactly. --recount derives counts from the hunk body, and --check
+  # fails closed before any patch mutates the pinned tree.
+  git -C "$DEST" apply --verbose --unidiff-zero --recount --check "$patch"
+  git -C "$DEST" apply --verbose --unidiff-zero --recount "$patch"
 done
 
 printf '%s\n' "Materialized Codex $PIN at $DEST"
