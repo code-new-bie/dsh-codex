@@ -24,8 +24,10 @@ for patch in "$ROOT"/upstream/patches/codex/*.patch; do
   # The maintained thin-fork patches are intentionally hand-readable and may
   # have stale hunk line counts after upstream rebases. Recount from the hunk
   # bodies while still requiring every context line to match the pinned Codex.
-  git -C "$DEST" apply --recount --check "$patch"
-  git -C "$DEST" apply --recount "$patch"
+  # Keep verbose diagnostics enabled: when an upstream sync drifts, CI should
+  # print the exact context Git searched for rather than only a line number.
+  git -C "$DEST" apply --verbose --recount --check "$patch"
+  git -C "$DEST" apply --verbose --recount "$patch"
 done
 
 printf '%s\n' "Materialized Codex $PIN at $DEST"
