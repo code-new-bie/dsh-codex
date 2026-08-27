@@ -27,7 +27,12 @@ if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
 }
 
-assertDependencyMap('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
+// The lock may retain unreachable historical production nodes until the next
+// reviewed freeze. Every dependency still shipped by the current manifest must
+// nevertheless have the exact frozen root spec. The staged shrinkwrap below
+// rewrites its root dependency map to the current manifest, so retired extras
+// cannot become publishable dependencies.
+assertDependencySubset('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
 assertDependencyMap('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
 
 const releaseRoot = path.join(root, '.release');
@@ -115,8 +120,8 @@ for (const file of walkJs(stage)) {
 }
 
 // Derive the publishable shrinkwrap from the source lock; do not resolve a new
-// graph during packaging. Dev nodes may remain recorded but are unreachable
-// because the staged root exposes production dependencies only.
+// graph during packaging. Dev nodes and historical nodes may remain recorded
+// but are unreachable because the staged root exposes production dependencies only.
 const shrinkwrap = structuredClone(sourceLock);
 shrinkwrap.name = packageJson.name;
 shrinkwrap.version = packageJson.version;
@@ -185,6 +190,14 @@ const metadata = {
 };
 fs.writeFileSync(`${targetTarball}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
 process.stdout.write(`${targetTarball}\n`);
+
+function assertDependencySubset(label, actual = {}, expected = {}) {
+  for (const [name, spec] of Object.entries(expected)) {
+    if (actual[name] !== spec) {
+      throw new Error(`Frozen package-lock.json ${label}.${name} does not match package.json: expected ${spec}, got ${actual[name] ?? '<missing>'}`);
+    }
+  }
+}
 
 function assertDependencyMap(label, actual = {}, expected = {}) {
   const actualEntries = Object.entries(actual).sort(([a], [b]) => a.localeCompare(b));
