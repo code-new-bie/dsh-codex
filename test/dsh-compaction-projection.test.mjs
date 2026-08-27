@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dshTurnsFromSession } from '../src/dsh/codex-shapes.mjs';
-import { DshxProductAdapter } from '../src/dsh/product-adapter.mjs';
+import { dshTurnsFromSession } from '../src/tui-protocol/shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 import { DshSessionProjector } from '../src/dsh/session-projector.mjs';
 
 const event = (type, data, time, seq = 0) => ({ type, data, time, seq });
@@ -79,7 +79,7 @@ test('resumed human transcript keeps shadowed history and adds one compaction ma
 });
 
 test('thread/compact/start delegates to the official DSH command plane and reports a no-op result', async () => {
-  const adapter = Object.create(DshxProductAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   const warnings = [];
   adapter.send = (message) => warnings.push(message);
   adapter.diagnostics = () => {};
@@ -114,7 +114,7 @@ test('thread/compact/start delegates to the official DSH command plane and repor
 });
 
 test('synthetic compaction turn interrupt aborts only the tracked official DSH operation', () => {
-  const adapter = Object.create(DshxProductAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   const abort = new AbortController();
   adapter._manualCompactions = new Map([['session-1', abort]]);
   const result = adapter.turnInterruptProduct({

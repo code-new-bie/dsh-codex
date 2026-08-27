@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import { startDshxLocalServer } from '../src/dsh/local-server.mjs';
-import { ProtocolStub, normalizeDispatchResult } from '../src/protocol.mjs';
+import { startDshxStdioTransport } from '../src/dsh/stdio-transport.mjs';
+import { ProtocolStub, normalizeDispatchResult } from '../devtools/protocol-poc.mjs';
 
 const delayMs = Number(process.env.DSHX_STUB_EVENT_DELAY_MS || 18);
 const traceFile = process.env.DSHX_STUB_TRACE_FILE;
@@ -38,10 +38,9 @@ class LocalStubAdapter {
         for (const event of events) {
           const threadId = event?.params?.threadId ?? event?.params?.thread?.id;
           const turnId = event?.params?.turnId ?? event?.params?.turn?.id;
-          const belongsToActiveTurn =
-            typeof threadId === 'string' &&
-            typeof turnId === 'string' &&
-            event.method !== 'turn/completed';
+          const belongsToActiveTurn = typeof threadId === 'string'
+            && typeof turnId === 'string'
+            && event.method !== 'turn/completed';
           if (belongsToActiveTurn && !this.stub.isTurnActive(threadId, turnId)) {
             trace({ direction: 'drop', method: event.method, threadId, turnId, reason: 'inactive-before-delay' });
             break;
@@ -53,11 +52,7 @@ class LocalStubAdapter {
           }
           this.send(event);
           trace({ direction: 'out', kind: 'notification', method: event.method, threadId: threadId ?? null, turnId: turnId ?? null });
-          if (
-            event.method === 'turn/completed' &&
-            typeof threadId === 'string' &&
-            typeof turnId === 'string'
-          ) {
+          if (event.method === 'turn/completed' && typeof threadId === 'string' && typeof turnId === 'string') {
             this.stub.completeTurn(threadId, turnId);
           }
         }
@@ -68,20 +63,8 @@ class LocalStubAdapter {
   async close() {}
 }
 
-const server = await startDshxLocalServer({
-  runtime: { async dispose() {} },
+startDshxStdioTransport({
+  ctx: { get: () => undefined },
   Adapter: LocalStubAdapter,
-  log: (message) => process.stderr.write(`[dshx-local-stub] ${message}\n`)
+  diagnostics: (message) => process.stderr.write(`[dshx-stdio-stub] ${message}\n`)
 });
-process.stdout.write(`${server.url}\n`);
-
-async function shutdown() {
-  try {
-    await server.close();
-  } finally {
-    process.exit(0);
-  }
-}
-
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);

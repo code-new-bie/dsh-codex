@@ -85,4 +85,17 @@ Implemented:
 - Codex/DSH pin + patch-queue sync model;
 - explicit RC promotion checklist in `RELEASE-READINESS.md`.
 
+## Milestone 5 — Standard profile-bundle delivery — implementation complete, real-session acceptance pending
+
+The surface ships as a regular DSH profile bundle instead of a bespoke launcher runtime:
+
+- the package manifest declares `dsh.bundle.patch`; official `dsh plugin --profile <p> add/remove` installs, layers, reconciles and withdraws the surface;
+- loader-mounted rows (`dshx-startup`, `dshx-presentation`) own launch parameters, transport and endpoint publication; lifecycle authority is the Cordis root Fiber;
+- `bin/dshx` is a thin bootstrap over the same official command (idempotent, version-pinned), and bare `dsh --profile tui` serves the endpoint passively with a visible listening hint;
+- the Codex dialect is confined to `src/tui-protocol/`, enforced structurally by the ownership guard;
+- per-platform release tarballs embed the pinned TUI + bridge and activate with zero environment overrides;
+- verification: `npm run verify:bundle` proves dev-flow and release-flavor delivery end to end (reconcile, composed-tree assertions, activation, single-instance rule); CI gates it in the Linux TUI job.
+
+Exit gate: one real interactive dogfooding session plus the Windows Terminal/CJK/IME acceptance already required for 1.0.
+
 1.0 may ship only when the exact candidate has green CI/release evidence and the manual Windows Terminal/CJK/IME UX acceptance is recorded as passing.

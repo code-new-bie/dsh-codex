@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { codexForkAtSeq } from '../src/dsh/session-fork.mjs';
+import { codexForkAtSeq } from '../src/tui-protocol/session-fork.mjs';
 
 const events = [
   { seq: 1, type: 'turn/start', data: { turn: 1 } },

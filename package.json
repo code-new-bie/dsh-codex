@@ -1,6 +1,11 @@
 {
-  "name": "dsh-codex",
+  "name": "@code-new-bie/dshx-tui",
   "version": "0.0.0-m1",
+  "description": "Codex-grade TUI surface bundle for official DeepSeek Harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/code-new-bie/dsh-codex.git"
+  },
   "private": true,
   "type": "module",
   "engines": {
@@ -9,25 +14,65 @@
   "bin": {
     "dshx": "./bin/dshx.mjs"
   },
+  "exports": {
+    ".": "./src/dsh/index.mjs",
+    "./presentation": "./src/dsh/presentation-plugin.mjs",
+    "./startup": "./src/dsh/startup-plugin.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/dshx.mjs",
+    "src/",
+    "cordis.patch.yml",
+    "package.json",
+    "README.md",
+    "NOTICE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "scripts": {
     "test": "node scripts/run-unit-tests.mjs",
     "test:protocol": "node --test --test-force-exit test/protocol.test.mjs test/wire.test.mjs",
     "test:dsh": "node --test --test-force-exit \"test/dsh-*.test.mjs\"",
     "freeze:deps": "node scripts/freeze-deps.mjs",
     "verify:release-deps": "node scripts/verify-dsh-closure.mjs . package-lock.json",
-    "stub": "node ./bin/dshx-stub-server.mjs",
+    "verify:bundle": "node scripts/verify-bundle-install.mjs",
+    "stub": "node ./devtools/dshx-stub-server.mjs",
     "dev": "node ./bin/dshx.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-app-boot": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-host-apiproxy": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-launch-environment": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.8",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.8"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-app-boot": { "optional": true },
+    "@deepseek-ai/dsh-host-apiproxy": { "optional": true },
+    "@deepseek-ai/dsh-launch-environment": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true }
+  },
+  "devDependencies": {
     "@deepseek-ai/dsh": "0.1.0-rc.8",
     "@deepseek-ai/dsh-agent": "0.1.0-rc.8",
     "@deepseek-ai/dsh-app-boot": "0.1.0-rc.8",
     "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.8",
     "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.8",
     "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
-    "@deepseek-ai/dsh-session": "0.1.0-rc.8"
-  },
-  "devDependencies": {
+    "@deepseek-ai/dsh-session": "0.1.0-rc.8",
     "ws": "^8.18.0"
   }
 }

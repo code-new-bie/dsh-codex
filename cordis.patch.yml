@@ -1,0 +1,22 @@
+# The DSHX presentation bundle rides on the profile's official DSH base.
+# The package manifest declares `dsh.bundle.patch`; the loader applies this
+# patch in `dsh.profile.bundles` order and owns row lifecycle.
+#
+# Only competing headless presentation rows are disabled. Runtime capability
+# rows remain entirely host-owned and user-authoritative.
+#
+# The launcher hands the private `--dshx-app-server` sentinel through the
+# official cmdlineArgs service. dshx-startup publishes that launch fact and
+# dshx-presentation binds NDJSON stdio directly to the already-mounted Context.
+- id: headless-startup
+  disabled: true
+- id: headless-runner
+  disabled: true
+
+- insert:
+    - id: dshx-startup
+      name: '@code-new-bie/dshx-tui/startup'
+
+    - id: dshx-presentation
+      name: '@code-new-bie/dshx-tui/presentation'
+      inject: [dshxStartup]

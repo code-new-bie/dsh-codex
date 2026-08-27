@@ -1,20 +1,13 @@
 diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 --- a/codex-rs/tui/src/main.rs
 +++ b/codex-rs/tui/src/main.rs
-@@ -1,10 +1,12 @@
+@@ -1,4 +1,5 @@
  use clap::Parser;
 +use codex_app_server_client::RemoteAppServerEndpoint;
  use codex_arg0::Arg0DispatchPaths;
  use codex_arg0::arg0_dispatch_or_else;
  use codex_config::LoaderOverrides;
- use codex_tui::AppExitInfo;
- use codex_tui::Cli;
- use codex_tui::ExitReason;
-+use codex_tui::resolve_remote_addr;
- use codex_tui::run_main;
- use codex_utils_cli::CliConfigOverrides;
- use std::io::Write;
-@@ -47,6 +49,42 @@ fn main() -> anyhow::Result<()> {
+@@ -47,6 +48,42 @@ fn main() -> anyhow::Result<()> {
          inner
              .config_overrides
              .raw_overrides
@@ -35,25 +28,19 @@ diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 +                other => anyhow::bail!("invalid DSHX_RESUME_MODE: {other}"),
 +            }
 +        }
-+        let dshx_endpoint = std::env::var("DSHX_APP_SERVER_ENDPOINT").map_err(|_| {
++        let dshx_command_json = std::env::var("DSHX_APP_SERVER_CMD").map_err(|_| {
 +            anyhow::anyhow!(
-+                "DSHX_APP_SERVER_ENDPOINT is required; DSHX never falls back to the Codex agent runtime"
++                "DSHX_APP_SERVER_CMD is required; DSHX never falls back to the Codex agent runtime"
 +            )
 +        })?;
-+        let dshx_token = std::env::var("DSHX_APP_SERVER_TOKEN").map_err(|_| {
-+            anyhow::anyhow!(
-+                "DSHX_APP_SERVER_TOKEN is required; DSHX local transport is always authenticated"
-+            )
-+        })?;
-+        let mut dshx_endpoint = resolve_remote_addr(&dshx_endpoint)?;
-+        match &mut dshx_endpoint {
-+            RemoteAppServerEndpoint::WebSocket { auth_token, .. } => {
-+                *auth_token = Some(dshx_token);
-+            }
-+            RemoteAppServerEndpoint::UnixSocket { .. } => {
-+                anyhow::bail!("DSHX production launcher requires authenticated loopback WebSocket transport")
-+            }
++        let dshx_command: Vec<String> = serde_json::from_str(&dshx_command_json)
++            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_CMD JSON: {err}"))?;
++        if dshx_command.is_empty() || dshx_command[0].is_empty() {
++            anyhow::bail!("DSHX_APP_SERVER_CMD must contain a non-empty executable argv[0]");
 +        }
++        let dshx_endpoint = RemoteAppServerEndpoint::StdioChild {
++            command: dshx_command,
++        };
          let exit_info = run_main(
              inner,
              arg0_paths,

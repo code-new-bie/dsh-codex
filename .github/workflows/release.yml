@@ -55,21 +55,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF_NAME" != "v1.0.0" ]]; then
-            exit 0
-          fi
+          if [[ "$GITHUB_REF_NAME" != "v1.0.0" ]]; then exit 0; fi
           for issue in 12 13 14 15; do
             state="$(gh issue view "$issue" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
-            if [[ "$state" != "CLOSED" ]]; then
-              echo "stable 1.0 is blocked: release-gate issue #$issue is $state" >&2
-              exit 1
-            fi
+            if [[ "$state" != "CLOSED" ]]; then echo "stable 1.0 is blocked: release-gate issue #$issue is $state" >&2; exit 1; fi
           done
           merged="$(gh pr view 11 --repo "$GITHUB_REPOSITORY" --json mergedAt --jq '.mergedAt != null')"
-          if [[ "$merged" != "true" ]]; then
-            echo 'stable 1.0 is blocked: PR #11 has not been merged' >&2
-            exit 1
-          fi
+          if [[ "$merged" != "true" ]]; then echo 'stable 1.0 is blocked: PR #11 has not been merged' >&2; exit 1; fi
       - name: Resolve release version (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -83,27 +75,22 @@ jobs:
           npm ci --include=optional --ignore-scripts=false
           node scripts/verify-dsh-closure.mjs
           npm test
-      - name: Boot official DSH runtime
+          node scripts/verify-ownership-boundary.mjs
+      - name: Enable pnpm for official plugin machinery
+        run: corepack enable pnpm
+      - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
-      - name: Build pinned TUI and local IPC bridge (Unix)
+      - name: Build pinned TUI (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: bash scripts/build-codex-tui.sh
-      - name: Build pinned TUI and local IPC bridge (Windows)
+      - name: Build pinned TUI (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build-codex-tui.ps1
-      - name: Verify local IPC data plane (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: dist/bin/dshx-ipc-bridge --check
-      - name: Verify local IPC data plane (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          & .\dist\bin\dshx-ipc-bridge.exe --check
-          if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
-      - name: Real pinned TUI local-IPC PTY + CJK + resize smoke
+      - name: Verify stdio thin-fork invariants
+        run: node scripts/verify-tui-invariants.mjs
+      - name: Real pinned TUI stdio PTY + CJK + resize smoke
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -112,17 +99,15 @@ jobs:
           python3 -m venv "$VENV"
           "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
           "$VENV/bin/python" test/tui_smoke.py
-      - name: Real pinned TUI Windows ConPTY + CJK local-IPC smoke
+      - name: Real pinned TUI Windows ConPTY + CJK stdio smoke
         if: runner.os == 'Windows'
         run: node test/tui_smoke_windows.mjs
-      - name: Build installable platform tarball (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
+      - name: Build installable platform tarball
         run: node scripts/package-platform.mjs
-      - name: Build installable platform tarball (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: node scripts/package-platform.mjs
+      - name: Verify release bundle install and stdio activation
+        env:
+          DSHX_REQUIRE_RELEASE: '1'
+        run: node scripts/verify-bundle-install.mjs
       - name: Clean install smoke (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -131,7 +116,12 @@ jobs:
           TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
           PREFIX="$RUNNER_TEMP/dshx-release-smoke"
           npm install --global --prefix "$PREFIX" --include=optional --ignore-scripts=false "$TGZ"
+          if npm ls --global --prefix "$PREFIX" @deepseek-ai/dsh --depth=0 >/dev/null 2>&1; then
+            echo 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' >&2
+            exit 1
+          fi
           "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
+          export DSHX_DSH_BIN="$PWD/node_modules/@deepseek-ai/dsh/lib/bin.js"
           "$PREFIX/bin/dshx" doctor
       - name: Clean install smoke (Windows)
         if: runner.os == 'Windows'
@@ -141,8 +131,11 @@ jobs:
           if (-not $tgz) { throw 'platform tarball missing' }
           $prefix = Join-Path $env:RUNNER_TEMP 'dshx-release-smoke'
           npm install --global --prefix $prefix --include=optional --ignore-scripts=false $tgz.FullName
+          & npm ls --global --prefix $prefix '@deepseek-ai/dsh' --depth=0 *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' }
           $version = & (Join-Path $prefix 'dshx.cmd') --version
           if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
+          $env:DSHX_DSH_BIN = (Resolve-Path 'node_modules\@deepseek-ai\dsh\lib\bin.js').Path
           & (Join-Path $prefix 'dshx.cmd') doctor
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -178,10 +171,12 @@ jobs:
               with open(filename, encoding='utf-8') as handle:
                   records.append((filename, json.load(handle)))
           expected_version = os.environ['GITHUB_REF_NAME'].removeprefix('v')
-          keys = ('version', 'dshVersion', 'codexCommit', 'dshCommit', 'transport', 'dependencyGraph', 'sourceLockSha256')
+          keys = ('version', 'dshVersion', 'dshHostRange', 'codexCommit', 'dshCommit', 'transport', 'dependencyGraph', 'sourceLockSha256')
           baseline = {key: records[0][1].get(key) for key in keys}
           if baseline['version'] != expected_version:
               raise SystemExit(f"artifact version mismatch: expected {expected_version}, got {baseline['version']}")
+          if baseline['transport'] != 'local-stdio-child':
+              raise SystemExit(f"unexpected transport provenance: {baseline['transport']}")
           if baseline['dependencyGraph'] != 'source-package-lock':
               raise SystemExit(f"unexpected dependency graph provenance: {baseline['dependencyGraph']}")
           lock_hash = baseline['sourceLockSha256']

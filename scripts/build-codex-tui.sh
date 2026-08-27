@@ -9,14 +9,14 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/.build/codex}"
 OUT_DIR="${DSHX_TUI_OUT_DIR:-$ROOT/dist/bin}"
 
 mkdir -p "$OUT_DIR"
+export CARGO_PROFILE_RELEASE_DEBUG="${CARGO_PROFILE_RELEASE_DEBUG:-0}"
 CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
   --manifest-path "$CODEX_DIR/codex-rs/Cargo.toml" \
   --locked --release -p codex-tui --bin codex-tui
-CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
-  --manifest-path "$CODEX_DIR/codex-rs/Cargo.toml" \
-  --locked --release -p codex-stdio-to-uds --bin dshx-ipc-bridge
 
 cp "$TARGET_DIR/release/codex-tui" "$OUT_DIR/dshx-tui"
-cp "$TARGET_DIR/release/dshx-ipc-bridge" "$OUT_DIR/dshx-ipc-bridge"
-chmod +x "$OUT_DIR/dshx-tui" "$OUT_DIR/dshx-ipc-bridge"
-printf '%s\n' "$OUT_DIR/dshx-tui" "$OUT_DIR/dshx-ipc-bridge"
+if command -v strip >/dev/null 2>&1; then
+  strip "$OUT_DIR/dshx-tui"
+fi
+chmod +x "$OUT_DIR/dshx-tui"
+printf '%s\n' "$OUT_DIR/dshx-tui"

@@ -7,7 +7,7 @@ import {
   dshTurnsFromSession,
   encodeDshModel,
   normalizeCodexEffort
-} from '../src/dsh/codex-shapes.mjs';
+} from '../src/tui-protocol/shapes.mjs';
 
 test('model picker encodes provider identity without hard-coding provider semantics', () => {
   const directory = {

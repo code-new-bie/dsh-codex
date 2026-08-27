@@ -5,7 +5,7 @@ import {
   codexPlanTarget,
   effectiveDshPlanState,
   threadSettingsUpdatedNotification
-} from '../src/dsh/plan-presentation.mjs';
+} from '../src/tui-protocol/plan-presentation.mjs';
 
 test('Codex plan/default modes map only to the DSH boolean plan target', () => {
   assert.equal(codexPlanTarget({ mode: 'plan', settings: {} }), true);
