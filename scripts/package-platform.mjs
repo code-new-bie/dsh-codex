@@ -22,14 +22,9 @@ const version = process.env.DSHX_VERSION || rootPackage.version;
 const platform = process.platform;
 const arch = process.arch;
 const tuiExe = platform === 'win32' ? 'dshx-tui.exe' : 'dshx-tui';
-const bridgeExe = platform === 'win32' ? 'dshx-ipc-bridge.exe' : 'dshx-ipc-bridge';
 const tuiSource = path.join(root, 'dist', 'bin', tuiExe);
-const bridgeSource = path.join(root, 'dist', 'bin', bridgeExe);
 if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
-}
-if (!fs.existsSync(bridgeSource)) {
-  throw new Error(`Missing built IPC bridge at ${bridgeSource}; build the pinned Codex transport bridge first`);
 }
 
 assertDependencyMap('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
@@ -50,9 +45,9 @@ function copy(relative) {
   fs.cpSync(from, to, { recursive: true });
 }
 
-// Ship only the production presentation closure. Early TCP/WebSocket protocol
-// stubs remain source-tree development fixtures and are deliberately excluded
-// from installable artifacts.
+// Ship the presentation closure only. The user's installed DSH owns every
+// stateful runtime service; DSHX contributes Cordis rows, protocol projection
+// code and the pinned TUI binary. There is no socket/bridge executable.
 copy('bin/dshx.mjs');
 copy('src/cli');
 copy('src/dsh');
@@ -66,18 +61,13 @@ copy('upstream/patches/codex');
 
 fs.mkdirSync(path.join(stage, 'dist', 'bin'), { recursive: true });
 fs.copyFileSync(tuiSource, path.join(stage, 'dist', 'bin', tuiExe));
-fs.copyFileSync(bridgeSource, path.join(stage, 'dist', 'bin', bridgeExe));
-if (platform !== 'win32') {
-  fs.chmodSync(path.join(stage, 'dist', 'bin', tuiExe), 0o755);
-  fs.chmodSync(path.join(stage, 'dist', 'bin', bridgeExe), 0o755);
-}
+if (platform !== 'win32') fs.chmodSync(path.join(stage, 'dist', 'bin', tuiExe), 0o755);
 
 const codexLicense = path.join(root, '.upstream', 'codex', 'LICENSE');
 if (!fs.existsSync(codexLicense)) {
   throw new Error('Pinned Codex LICENSE is missing; materialize Codex before packaging');
 }
 fs.copyFileSync(codexLicense, path.join(stage, 'LICENSE'));
-
 fs.copyFileSync(path.join(root, 'cordis.patch.yml'), path.join(stage, 'cordis.patch.yml'));
 
 const packageJson = {
@@ -90,10 +80,6 @@ const packageJson = {
   cpu: [arch],
   engines: rootPackage.engines,
   bin: { dshx: './bin/dshx.mjs' },
-  // Bundle flavor: host services stay peers so profile installs never pull
-  // stateful runtime copies (single-instance rule) nor trip pnpm build-script
-  // gates; only leaf parser libraries ship as real dependencies. Binaries are
-  // embedded below via dist/bin, resolved as file paths at runtime.
   exports: rootPackage.exports,
   dsh: rootPackage.dsh,
   peerDependencies: rootPackage.peerDependencies,
@@ -116,25 +102,21 @@ const packageJson = {
 };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
-// Every relative import in the release closure must resolve inside the staged
-// package. Cover static `from`, side-effect `import`, and dynamic `import()` so
-// a source-tree-only helper cannot hide behind a lazy code path and leak into
-// 1.0 packaging.
+// Every relative production import must resolve from the staged package.
 const localImportPattern = /(?:from\s+|import\s*(?:\(\s*)?)["'](\.{1,2}\/[^"']+)["']/g;
 for (const file of walkJs(stage)) {
   const source = fs.readFileSync(file, 'utf8');
   for (const match of source.matchAll(localImportPattern)) {
     const target = resolveLocalImport(path.dirname(file), match[1]);
-    if (!target) throw new Error(`Release package has unresolved local import ${match[1]} from ${path.relative(stage, file)}`);
+    if (!target) {
+      throw new Error(`Release package has unresolved local import ${match[1]} from ${path.relative(stage, file)}`);
+    }
   }
 }
 
-// npm-shrinkwrap.json is the publishable form of package-lock.json. Derive the
-// artifact lock from the trusted source lock so packaging cannot silently
-// resolve a different transitive graph. The source lock may contain dev-only
-// nodes for repository tests; the publishable root deliberately exposes only
-// production dependencies, so those nodes are not reachable from the shipped
-// package even though their resolved records remain frozen in the lockfile.
+// Derive the publishable shrinkwrap from the source lock; do not resolve a new
+// graph during packaging. Dev nodes may remain recorded but are unreachable
+// because the staged root exposes production dependencies only.
 const shrinkwrap = structuredClone(sourceLock);
 shrinkwrap.name = packageJson.name;
 shrinkwrap.version = packageJson.version;
@@ -162,13 +144,8 @@ const packArgs = ['pack', stage, '--pack-destination', out, '--json'];
 let npmExecutable = 'npm';
 let npmArgs = packArgs;
 if (platform === 'win32') {
-  // Node 24 no longer reliably spawns .cmd launchers through execFileSync.
-  // setup-node ships npm's JavaScript CLI beside node.exe, so execute that
-  // directly with the exact Node runtime used by the release job.
   const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  if (!fs.existsSync(npmCli)) {
-    throw new Error(`Bundled npm CLI is missing: ${npmCli}`);
-  }
+  if (!fs.existsSync(npmCli)) throw new Error(`Bundled npm CLI is missing: ${npmCli}`);
   npmExecutable = process.execPath;
   npmArgs = [npmCli, ...packArgs];
 }
@@ -178,8 +155,6 @@ const packOutput = execFileSync(
   { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
 );
 const packed = JSON.parse(packOutput);
-// npm <10 returns a top-level array; newer npm keys the record by package
-// name (mandatory for scoped names like @code-new-bie/dshx-tui).
 const packRecord = Array.isArray(packed) ? packed[0] : packed[Object.keys(packed)[0]];
 const filename = packRecord?.filename;
 if (!filename) throw new Error(`npm pack did not return a filename: ${packOutput}`);
@@ -190,17 +165,20 @@ if (path.resolve(sourceTarball) !== path.resolve(targetTarball)) {
   fs.renameSync(sourceTarball, targetTarball);
 }
 
-// Keep metadata deterministic for a given source/version/platform. Wall clock
-// and builder hostname belong in CI provenance, not the distributable sidecar.
+const testedDshVersion = rootPackage.devDependencies?.['@deepseek-ai/dsh']
+  ?? Object.entries(rootPackage.peerDependencies ?? {})
+    .find(([name, value]) => name.startsWith('@deepseek-ai/dsh-') && /^\d/.test(String(value)))?.[1]
+  ?? rootPackage.peerDependencies?.['@deepseek-ai/dsh'];
 const metadata = {
   version,
   platform,
   arch,
   node: process.version,
-  dshVersion: rootPackage.dependencies['@deepseek-ai/dsh'],
+  dshVersion: testedDshVersion,
+  dshHostRange: rootPackage.peerDependencies?.['@deepseek-ai/dsh'] ?? null,
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
-  transport: 'local-uds-via-stdio-bridge',
+  transport: 'local-stdio-child',
   dependencyGraph: 'source-package-lock',
   sourceLockSha256,
   tarball: path.basename(targetTarball)

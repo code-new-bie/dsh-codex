@@ -1,15 +1,13 @@
-# The DSHX surface bundle patch, riding over this profile's dsh-base layer.
-# Loaded automatically because the package manifest declares
-# `dsh.bundle.patch`; the loader applies it in `dsh.profile.bundles` order.
+# The DSHX presentation bundle rides on the profile's official DSH base.
+# The package manifest declares `dsh.bundle.patch`; the loader applies this
+# patch in `dsh.profile.bundles` order and owns row lifecycle.
 #
-# Only the competing presentation rows are locked off; every runtime
-# capability row remains user-authoritative (a targeted patch replaces a
-# row's whole config, and these two carry no config of their own).
+# Only competing headless presentation rows are disabled. Runtime capability
+# rows remain entirely host-owned and user-authoritative.
 #
-# Launch inputs flow through the official three-stage pattern: the
-# dshx-startup row resolves the launcher/environment descriptor and provides
-# the `dshxStartup` service; the dshx-presentation row injects it to start
-# the local IPC transport and publish the `dshxPresentation` endpoint.
+# The launcher hands the private `--dshx-app-server` sentinel through the
+# official cmdlineArgs service. dshx-startup publishes that launch fact and
+# dshx-presentation binds NDJSON stdio directly to the already-mounted Context.
 - id: headless-startup
   disabled: true
 - id: headless-runner
