@@ -15,7 +15,7 @@ concurrency:
 jobs:
   windows:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release/')
-    name: Windows ConPTY / CJK / local IPC
+    name: Windows ConPTY / CJK / DSH stdio
     runs-on: windows-latest
     timeout-minutes: 150
     steps:
@@ -28,37 +28,30 @@ jobs:
           EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           $actual = (git rev-parse HEAD).Trim()
-          if ($actual -ne $env:EXPECTED_SHA) {
-            throw "wrong source checkout: expected=$env:EXPECTED_SHA actual=$actual"
-          }
+          if ($actual -ne $env:EXPECTED_SHA) { throw "wrong source checkout: expected=$env:EXPECTED_SHA actual=$actual" }
           Write-Host "exact source checkout: $actual"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - name: Install frozen dependency graph
         run: npm ci --include=optional --ignore-scripts=false
-      - name: Verify exact DeepSeek Harness release closure
+      - name: Verify DSH release closure
         run: node scripts/verify-dsh-closure.mjs
-      - name: Boot and dispose official DeepSeek Harness composition
+      - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
-      - name: Build pinned Codex TUI + local IPC bridge
+      - name: Build pinned Codex TUI
         shell: pwsh
         env:
           DSHX_VERSION: 1.0.0-ci
         run: ./scripts/build-codex-tui.ps1
-      - name: Verify thin-fork and transport invariants
+      - name: Verify thin-fork and stdio invariants
         run: node scripts/verify-tui-invariants.mjs
-      - name: Verify Windows local IPC data plane
-        shell: pwsh
-        run: |
-          & .\dist\bin\dshx-ipc-bridge.exe --check
-          if ($LASTEXITCODE -ne 0) { throw 'local IPC data-plane self-check failed' }
       - name: Exercise real TUI through Windows ConPTY + CJK text
         run: node test/tui_smoke_windows.mjs
 
   macos:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release/')
-    name: macOS PTY / CJK / resize / local IPC
+    name: macOS PTY / CJK / resize / DSH stdio
     runs-on: macos-26
     timeout-minutes: 120
     steps:
@@ -72,30 +65,24 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          if [[ "$actual" != "$EXPECTED_SHA" ]]; then
-            echo "wrong source checkout: expected=$EXPECTED_SHA actual=$actual" >&2
-            exit 1
-          fi
+          if [[ "$actual" != "$EXPECTED_SHA" ]]; then echo "wrong source checkout: expected=$EXPECTED_SHA actual=$actual" >&2; exit 1; fi
           echo "exact source checkout: $actual"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - name: Install frozen dependency graph
         run: npm ci --include=optional --ignore-scripts=false
-      - name: Verify exact DeepSeek Harness release closure
+      - name: Verify DSH release closure
         run: node scripts/verify-dsh-closure.mjs
-      - name: Boot and dispose official DeepSeek Harness composition
+      - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
-      - name: Build pinned Codex TUI + local IPC bridge
+      - name: Build pinned Codex TUI
         shell: bash
         env:
           DSHX_VERSION: 1.0.0-ci
         run: bash scripts/build-codex-tui.sh
-      - name: Verify thin-fork and transport invariants
+      - name: Verify thin-fork and stdio invariants
         run: node scripts/verify-tui-invariants.mjs
-      - name: Verify macOS local IPC data plane
-        shell: bash
-        run: dist/bin/dshx-ipc-bridge --check
       - name: Exercise real TUI through macOS PTY + CJK + resize
         shell: bash
         run: |

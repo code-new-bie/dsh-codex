@@ -1,119 +1,95 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 
-function read(path) {
-  return readFileSync(path, 'utf8');
-}
-
+function read(path) { return readFileSync(path, 'utf8'); }
 function requireText(path, needle) {
-  const text = read(path);
-  if (!text.includes(needle)) {
-    throw new Error(`${path} is missing required invariant: ${needle}`);
-  }
+  if (!read(path).includes(needle)) throw new Error(`${path} is missing required invariant: ${needle}`);
 }
-
 function forbidText(path, pattern, label = String(pattern)) {
   const text = read(path);
   const hit = pattern instanceof RegExp ? pattern.test(text) : text.includes(pattern);
-  if (hit) {
-    throw new Error(`${path} violates ownership invariant: ${label}`);
-  }
+  if (hit) throw new Error(`${path} violates ownership invariant: ${label}`);
 }
 
-requireText('docs/ARCHITECTURE.md', 'must not grow into an agent framework');
-requireText('docs/TEAM.md', 'DeepSeek Harness remains an upstream dependency');
-
-// Runtime composition must stay on the official DSH app-boot/profile plane.
-// Do not key this guard to historical bundle row ids such as `dsh-base`:
-// those are upstream implementation details, not the ownership boundary.
-requireText('src/dsh/runtime-boot.mjs', "from '@deepseek-ai/dsh-app-boot'");
-requireText('src/dsh/runtime-boot.mjs', "const DEFAULT_PROFILE = 'tui'");
-requireText('src/dsh/runtime-boot.mjs', 'loadProfile(');
-requireText('src/dsh/runtime-boot.mjs', 'composeEntries(');
-requireText('src/dsh/runtime-boot.mjs', 'ctx = await boot(');
-requireText('src/dsh/runtime-boot.mjs', 'profile.layers.flatMap((layer) => layer.patches)');
-requireText('src/dsh/runtime-boot.mjs', 'profile.patches');
-requireText('src/dsh/runtime-boot.mjs', 'homePatches');
-// The surface is a real bundle: the manifest declares dsh.bundle.patch and the
-// shipped patch carries the surface rows plus the competing-runner locks.
+// Bundle/profile ownership: activation is declared, never mounted by DSHX.
 requireText('cordis.patch.yml', 'id: headless-startup');
 requireText('cordis.patch.yml', 'id: headless-runner');
 requireText('cordis.patch.yml', "name: '@code-new-bie/dshx-tui/startup'");
 requireText('cordis.patch.yml', "name: '@code-new-bie/dshx-tui/presentation'");
-{
-  const manifest = JSON.parse(read('package.json'));
-  if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml') {
-    throw new Error('package.json must declare dsh.bundle.patch -> ./cordis.patch.yml for loader activation');
-  }
-  if (!manifest.exports['./presentation'] || !manifest.exports['./startup']) {
-    throw new Error('package.json exports must expose the surface row modules');
-  }
-  // Single-instance rule: shadowing healed installation symlinks with profile
-  // copies of dsh runtime packages would split every service registry in two.
-  const runtimePeers = Object.keys(manifest.peerDependencies ?? {}).filter((name) => name.startsWith('@deepseek-ai/dsh'));
-  if (runtimePeers.length === 0) throw new Error('dsh runtime packages must stay declared as peerDependencies');
-  for (const name of runtimePeers) {
-    if (manifest.dependencies?.[name] !== undefined) {
-      throw new Error(`${name} must not be a real dependency; it would shadow the healed fallback symlinks`);
-    }
+const manifest = JSON.parse(read('package.json'));
+if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml') {
+  throw new Error('package.json must declare dsh.bundle.patch -> ./cordis.patch.yml');
+}
+if (!manifest.exports?.['./presentation'] || !manifest.exports?.['./startup']) {
+  throw new Error('package exports must expose the two Cordis surface rows');
+}
+
+// Stateful DSH runtime packages are host peers; only leaf helper libraries may
+// be real dependencies in the profile package.
+const runtimePeers = Object.keys(manifest.peerDependencies ?? {}).filter((name) => name.startsWith('@deepseek-ai/dsh'));
+if (runtimePeers.length === 0) throw new Error('DSH runtime packages must be peerDependencies');
+for (const name of runtimePeers) {
+  if (manifest.dependencies?.[name] !== undefined) {
+    throw new Error(`${name} must not be a production dependency (single-instance rule)`);
   }
 }
-// The presentation lifetime mounts as a Cordis-contract plugin row.
-requireText('src/dsh/presentation-plugin.mjs', 'export const name');
-requireText('src/dsh/presentation-plugin.mjs', 'ctx.provide(SERVICE_KEY');
-requireText('src/dsh/presentation-plugin.mjs', "inject = ['dshxStartup']");
-requireText('src/dsh/startup-plugin.mjs', "provide('dshxStartup'");
-// The launcher only bootstraps via the official plugin command, never mounts
-// rows itself; the shared bootstrap module owns the command assembly and
-// resolves the dsh CLI without requiring a global installation.
+
+// There is exactly one runtime owner: the official dsh launcher/profile.
+for (const retired of ['src/dsh/runtime-boot.mjs', 'src/dsh/local-server.mjs']) {
+  if (existsSync(retired)) throw new Error(`${retired} must stay deleted; DSHX cannot own a runtime/socket host`);
+}
 requireText('src/dsh/profile-bootstrap.mjs', "'plugin', '--profile'");
 requireText('src/dsh/profile-bootstrap.mjs', 'resolveDshInvocation');
-forbidText('src/dsh/runtime-boot.mjs', 'bootDshxPresentationRuntime');
-// Presentation lifetime may adapt the Context shape, but teardown must remain
-// delegated to Cordis/DSH root-fiber ownership rather than a DSHX runtime.
-requireText('src/dsh/runtime-boot.mjs', 'ctx.fiber.dispose()');
-requireText('src/dsh/runtime-boot.mjs', 'attachPresentationLifetime(ctx)');
-// The declared tested DSH line is ecosystem-honest metadata: warn once at
-// boot, never block the host (official bundles carry peer ranges, no gates).
-requireText('src/dsh/runtime-boot.mjs', 'reportDshLineCompatibility');
-requireText('src/dsh/runtime-boot.mjs', 'proceeding');
-// Host-version agnosticism: the production launcher and row modules must not
-// import harness builds from our package — at runtime everything rides the
-// user's installed DSH via the profile loader and its healed fallback.
-forbidText('bin/dshx.mjs', /(?:from\s+|import\s+\(\s*|require\()\s*["']@deepseek-ai\//, 'importing harness builds');
-forbidText('src/dsh/presentation-plugin.mjs', 'runtime-boot');
-forbidText('src/dsh/local-server.mjs', "from './runtime-boot.mjs'");
-requireText('src/dsh/startup-plugin.mjs', 'DSHX_ATTACH');
+requireText('bin/dshx.mjs', 'DSHX_APP_SERVER_CMD');
+requireText('bin/dshx.mjs', "'--dshx-app-server'");
+forbidText('bin/dshx.mjs', /(?:from\s+|import\s+\(\s*|require\()\s*["']@deepseek-ai\//, 'importing Harness runtime builds');
+forbidText('bin/dshx.mjs', 'DSHX_APP_SERVER_ENDPOINT', 'socket endpoint launch path');
+forbidText('bin/dshx.mjs', 'DSHX_IPC_BRIDGE_BIN', 'bridge launch path');
 
+// Cordis rows consume launcher facts and bind only NDJSON stdio to the live ctx.
+requireText('src/dsh/startup-plugin.mjs', "inject = ['cmdlineArgs']");
+requireText('src/dsh/startup-plugin.mjs', '--dshx-app-server');
+requireText('src/dsh/startup-plugin.mjs', "provide('dshxStartup'");
+requireText('src/dsh/presentation-plugin.mjs', 'startDshxStdioTransport');
+requireText('src/dsh/presentation-plugin.mjs', 'ctx.provide(SERVICE_KEY');
+requireText('src/dsh/presentation-plugin.mjs', "inject = ['dshxStartup']");
+forbidText('src/dsh/presentation-plugin.mjs', 'spawn(');
+forbidText('src/dsh/presentation-plugin.mjs', 'runtime-boot');
+requireText('src/dsh/stdio-transport.mjs', 'already-mounted DSH Context');
+forbidText('src/dsh/stdio-transport.mjs', /WebSocket|unix:\/\//, 'network/socket framing');
+
+// The thin fork must spawn a local stdio backend and must not materialize the
+// historical Rust UDS bridge.
+requireText('upstream/patches/codex/0001-dshx-force-ui-backend.patch', 'DSHX_APP_SERVER_CMD');
+requireText('upstream/patches/codex/0010-dshx-stdio-backend.patch', 'StdioAppServerClient');
+for (const file of readdirSync('upstream/patches/codex')) {
+  if (!file.endsWith('.patch')) continue;
+  forbidText(`upstream/patches/codex/${file}`, 'dshx-ipc-bridge', 'legacy Rust bridge');
+}
+forbidText('scripts/build-codex-tui.sh', 'dshx-ipc-bridge');
+forbidText('scripts/build-codex-tui.ps1', 'dshx-ipc-bridge');
+
+// Domain capabilities delegate to DSH public services rather than local OS or
+// shadow runtime state.
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');
   requireText(path, 'tools.execute');
 }
 requireText('src/dsh/user-shell.mjs', 'agent: controller.agent');
 requireText('src/dsh/workspace-command.mjs', 'agent');
-requireText('src/tui-protocol/adapter.mjs', "case 'command/exec'");
-
 requireText('src/dsh/host-api.mjs', '@deepseek-ai/dsh-host-apiproxy');
 requireText('src/dsh/host-api.mjs', 'api.sessions.fork');
+requireText('src/tui-protocol/adapter.mjs', "case 'command/exec'");
 requireText('src/tui-protocol/adapter.mjs', 'executeDshCommand');
 requireText('src/dsh/commands.mjs', 'commands.execute');
 forbidText('src/tui-protocol/adapter.mjs', 'compactNow');
 forbidText('src/dsh/agent-driver.mjs', /seedLength|parentSession|dshForkSeed/, 'shadow fork/session seed state');
-// The unified adapter may read DSH's durable `parentSession` header field to
-// delegate subagent interruption back to ctx.subagents, but it must never
-// keep shadow fork/session seed state of its own.
 forbidText('src/tui-protocol/adapter.mjs', /seedLength|dshForkSeed/, 'shadow fork/session seed state');
 requireText('src/tui-protocol/adapter.mjs', 'subagents.interrupt');
 forbidText('src/dsh/agent-driver.mjs', 'fork(sourceAgent');
 
-forbidText('src/dsh/local-server.mjs', 'WebSocketServer', 'production TCP WebSocket server');
-requireText('src/dsh/local-server.mjs', 'unix://');
-requireText('scripts/build-codex-tui.sh', 'dshx-ipc-bridge');
-
-// The Codex dialect lives only in the protocol namespace; domain modules in
-// src/dsh stay DSH-vocabulary (gradual cleanup tracked for residual field
-// mappings, enforced structurally by these two placement checks).
-try { readFileSync('src/tui-protocol/shapes.mjs'); readFileSync('src/tui-protocol/adapter.mjs'); } catch {
-  throw new Error('Codex protocol dictionary must live under src/tui-protocol/');
+// Codex is only a presentation dialect.
+for (const required of ['src/tui-protocol/shapes.mjs', 'src/tui-protocol/adapter.mjs']) {
+  if (!existsSync(required)) throw new Error(`missing protocol projection module: ${required}`);
 }
 for (const entry of readdirSync('src/dsh')) {
   if (/codex/i.test(entry)) throw new Error(`src/dsh must not carry codex-named modules; found ${entry}`);
