@@ -88,6 +88,7 @@ const packageJson = {
   exports: rootPackage.exports,
   dsh: rootPackage.dsh,
   peerDependencies: rootPackage.peerDependencies,
+  peerDependenciesMeta: rootPackage.peerDependenciesMeta,
   dependencies: rootPackage.dependencies,
   repository: { type: 'git', url: 'https://github.com/code-new-bie/dsh-codex.git' },
   files: [
@@ -135,6 +136,7 @@ shrinkwrapRoot.engines = packageJson.engines;
 shrinkwrapRoot.bin = packageJson.bin;
 shrinkwrapRoot.dependencies = packageJson.dependencies;
 shrinkwrapRoot.peerDependencies = packageJson.peerDependencies ?? {};
+shrinkwrapRoot.peerDependenciesMeta = packageJson.peerDependenciesMeta ?? {};
 delete shrinkwrapRoot.devDependencies;
 const shrinkwrapPath = path.join(stage, 'npm-shrinkwrap.json');
 fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);

@@ -25,13 +25,21 @@ if (!manifest.exports?.['./presentation'] || !manifest.exports?.['./startup']) {
 
 // Every DSH package belongs to the user's official installation. DSHX may
 // depend on non-DSH leaf helpers, but it must never install a second Harness
-// package into the profile. Service definitions are host peers and resolve
-// through DSH's installation-owned profile fallback.
+// package into the profile. Service definitions are optional advisory host
+// peers and resolve through DSH's installation-owned profile fallback.
 const runtimePeers = Object.keys(manifest.peerDependencies ?? {}).filter((name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'));
 if (runtimePeers.length === 0) throw new Error('DSH runtime packages must be peerDependencies');
 for (const name of Object.keys(manifest.dependencies ?? {})) {
   if (name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) {
     throw new Error(`${name} must not be a production dependency (single-runtime rule)`);
+  }
+}
+for (const name of runtimePeers) {
+  if (manifest.peerDependencies[name] !== '>=0.1.0-rc.8') {
+    throw new Error(`${name} must use the host compatibility floor >=0.1.0-rc.8`);
+  }
+  if (manifest.peerDependenciesMeta?.[name]?.optional !== true) {
+    throw new Error(`${name} must be an optional advisory peer so npm cannot auto-install a second Harness runtime`);
   }
 }
 

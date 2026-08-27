@@ -76,7 +76,7 @@ jobs:
           node scripts/verify-dsh-closure.mjs
           npm test
           node scripts/verify-ownership-boundary.mjs
-      - name: Enable pnpm for official profile machinery
+      - name: Enable pnpm for official plugin machinery
         run: corepack enable pnpm
       - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
@@ -116,7 +116,12 @@ jobs:
           TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
           PREFIX="$RUNNER_TEMP/dshx-release-smoke"
           npm install --global --prefix "$PREFIX" --include=optional --ignore-scripts=false "$TGZ"
+          if npm ls --global --prefix "$PREFIX" @deepseek-ai/dsh --depth=0 >/dev/null 2>&1; then
+            echo 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' >&2
+            exit 1
+          fi
           "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
+          export DSHX_DSH_BIN="$PWD/node_modules/@deepseek-ai/dsh/lib/bin.js"
           "$PREFIX/bin/dshx" doctor
       - name: Clean install smoke (Windows)
         if: runner.os == 'Windows'
@@ -126,8 +131,11 @@ jobs:
           if (-not $tgz) { throw 'platform tarball missing' }
           $prefix = Join-Path $env:RUNNER_TEMP 'dshx-release-smoke'
           npm install --global --prefix $prefix --include=optional --ignore-scripts=false $tgz.FullName
+          & npm ls --global --prefix $prefix '@deepseek-ai/dsh' --depth=0 *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' }
           $version = & (Join-Path $prefix 'dshx.cmd') --version
           if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
+          $env:DSHX_DSH_BIN = (Resolve-Path 'node_modules\@deepseek-ai\dsh\lib\bin.js').Path
           & (Join-Path $prefix 'dshx.cmd') doctor
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
