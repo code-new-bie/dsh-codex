@@ -37,6 +37,8 @@ jobs:
         run: npm ci --include=optional --ignore-scripts=false
       - name: Verify DSH release closure
         run: node scripts/verify-dsh-closure.mjs
+      - name: Enable pnpm for official profile machinery
+        run: corepack enable pnpm
       - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
       - name: Build pinned Codex TUI
@@ -46,6 +48,8 @@ jobs:
         run: ./scripts/build-codex-tui.ps1
       - name: Verify thin-fork and stdio invariants
         run: node scripts/verify-tui-invariants.mjs
+      - name: Verify bundle install and stdio activation
+        run: node scripts/verify-bundle-install.mjs
       - name: Exercise real TUI through Windows ConPTY + CJK text
         run: node test/tui_smoke_windows.mjs
 
@@ -74,6 +78,8 @@ jobs:
         run: npm ci --include=optional --ignore-scripts=false
       - name: Verify DSH release closure
         run: node scripts/verify-dsh-closure.mjs
+      - name: Enable pnpm for official profile machinery
+        run: corepack enable pnpm
       - name: Verify official DSH stdio lifecycle
         run: node scripts/runtime-smoke.mjs
       - name: Build pinned Codex TUI
@@ -83,6 +89,8 @@ jobs:
         run: bash scripts/build-codex-tui.sh
       - name: Verify thin-fork and stdio invariants
         run: node scripts/verify-tui-invariants.mjs
+      - name: Verify bundle install and stdio activation
+        run: node scripts/verify-bundle-install.mjs
       - name: Exercise real TUI through macOS PTY + CJK + resize
         shell: bash
         run: |
@@ -91,3 +99,20 @@ jobs:
           python3 -m venv "$VENV"
           "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
           "$VENV/bin/python" test/tui_smoke.py
+
+  summary:
+    if: always() && (github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release/'))
+    name: RC platform summary
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all platform gates
+        env:
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$WINDOWS_RESULT" == success ]] || { echo "Windows RC gate: $WINDOWS_RESULT" >&2; exit 1; }
+          [[ "$MACOS_RESULT" == success ]] || { echo "macOS RC gate: $MACOS_RESULT" >&2; exit 1; }
+          echo 'Windows and macOS RC platform gates passed.'
