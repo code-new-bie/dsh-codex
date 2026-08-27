@@ -117,8 +117,13 @@ function assertComposition(dumpText) {
       for (const id of ['dshx-startup', 'dshx-presentation']) {
         if (!byId.has(id)) throw new Error(`composed tree is missing '${id}'`);
       }
-      if (byId.get('headless-runner')?.disabled !== true) {
-        throw new Error('competing headless-runner must be disabled by the DSHX bundle patch');
+      // A fresh custom `tui` profile is base-only in official DSH, so the
+      // headless bundle (and therefore headless-runner) is normally absent.
+      // If a user deliberately composes headless into the same profile, the
+      // DSHX layer defensively disables that competing presentation runner.
+      const headlessRunner = byId.get('headless-runner');
+      if (headlessRunner !== undefined && headlessRunner.disabled !== true) {
+        throw new Error('competing headless-runner must be absent or disabled by the DSHX bundle patch');
       }
     } finally {
       fs.rmSync(temp, { force: true });
