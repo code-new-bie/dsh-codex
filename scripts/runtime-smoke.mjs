@@ -9,7 +9,8 @@ import { ensureProfileInstalled, resolveDshInvocation } from '../src/dsh/profile
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-const TIMEOUT_MS = Number(process.env.DSHX_SMOKE_BOOT_TIMEOUT_MS ?? 90_000);
+const BOOT_TIMEOUT_MS = Number(process.env.DSHX_SMOKE_BOOT_TIMEOUT_MS ?? 90_000);
+const EXIT_TIMEOUT_MS = Number(process.env.DSHX_SMOKE_EXIT_TIMEOUT_MS ?? 15_000);
 
 const ensured = ensureProfileInstalled({
   packageRoot: ROOT,
@@ -23,7 +24,7 @@ const dsh = resolveDshInvocation(ROOT);
 await new Promise((resolve, reject) => {
   const child = spawn(dsh.command, [...dsh.args, '--profile', ensured.profile, '--dshx-app-server'], {
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, DSHX_DEBUG: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   });
@@ -31,6 +32,11 @@ await new Promise((resolve, reject) => {
   let initialized = false;
   let stderr = '';
   let settled = false;
+  let timer;
+  const arm = (timeoutMs, label) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => finish(new Error(`official DSH stdio ${label} exceeded ${timeoutMs}ms${stderr ? `:\n${stderr}` : ''}`)), timeoutMs);
+  };
   const finish = (error) => {
     if (settled) return;
     settled = true;
@@ -43,7 +49,7 @@ await new Promise((resolve, reject) => {
       resolve();
     }
   };
-  const timer = setTimeout(() => finish(new Error(`official DSH stdio smoke exceeded ${TIMEOUT_MS}ms${stderr ? `:\n${stderr}` : ''}`)), TIMEOUT_MS);
+  arm(BOOT_TIMEOUT_MS, 'boot');
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk.toString('utf8')}`.slice(-16384); });
   child.on('error', finish);
   lines.on('line', (line) => {
@@ -58,6 +64,7 @@ await new Promise((resolve, reject) => {
     process.stdout.write(`official DSH composition mounted: ${message.result?.userAgent ?? 'dshx'}\n`);
     child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
     child.stdin.end();
+    arm(EXIT_TIMEOUT_MS, 'EOF/appExit shutdown');
   });
   child.on('exit', (code, signal) => {
     if (!initialized) {

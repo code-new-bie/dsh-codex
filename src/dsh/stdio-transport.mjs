@@ -24,10 +24,8 @@ function internalError(message, error) {
 
 /**
  * Start a single-client Codex app-server transport directly on process stdio.
- *
- * The transport owns framing only. The adapter continues to talk exclusively
- * to the already-mounted DSH Context supplied by the hosting composition; it
- * never imports, boots or disposes another Harness runtime.
+ * The adapter talks only to the already-mounted DSH Context supplied by the
+ * hosting composition; this module never boots or disposes a Harness runtime.
  */
 export function startDshxStdioTransport({
   ctx,
@@ -52,21 +50,16 @@ export function startDshxStdioTransport({
   }
 
   const transportFault = (message) => {
-    try {
-      errorOutput?.write?.(`[dshx] ${message}\n`);
-    } catch {
-      // Diagnostics must never make the protocol transport less reliable.
-    }
+    try { errorOutput?.write?.(`[dshx] ${message}\n`); } catch {}
   };
 
   let closing = false;
   let readClosed = false;
+  let eofTriggered = false;
   let closePromise;
   const pending = new Set();
 
   const send = (message) => {
-    // stdin may already be at EOF while the final request is still being
-    // handled; keep stdout writable until all pending responses drain.
     if (output.destroyed === true || output.writableEnded === true) {
       throw new Error('DSHX stdio app-server output is not writable');
     }
@@ -83,14 +76,7 @@ export function startDshxStdioTransport({
     }
   };
 
-  const adapter = new Adapter({
-    ctx,
-    cwd,
-    home,
-    version,
-    send,
-    diagnostics
-  });
+  const adapter = new Adapter({ ctx, cwd, home, version, send, diagnostics });
   const lines = createInterface({ input, crlfDelay: Infinity, terminal: false });
 
   const handleLine = (line) => {
@@ -103,13 +89,9 @@ export function startDshxStdioTransport({
         safeSend(parseError(error));
         return;
       }
-
       try {
         const handled = await adapter.handle(message);
         if (!handled) return;
-        // Preserve the existing adapter contract: the JSON-RPC response must
-        // reach the client before any afterResponse side effect is allowed to
-        // emit follow-up notifications.
         if (!safeSend(handled.response)) return;
         await handled.afterResponse?.();
       } catch (error) {
@@ -120,20 +102,17 @@ export function startDshxStdioTransport({
     pending.add(task);
     void task.finally(() => pending.delete(task));
   };
-
   lines.on('line', handleLine);
 
+  let handleNaturalEof;
   const close = () => {
     if (closePromise) return closePromise;
     closing = true;
+    input.off?.('end', handleNaturalEof);
     closePromise = (async () => {
       if (!readClosed) {
         readClosed = true;
-        try {
-          lines.close();
-        } catch {
-          // Already closed by EOF.
-        }
+        try { lines.close(); } catch {}
       }
       if (pending.size > 0) await Promise.allSettled([...pending]);
       await adapter.close?.();
@@ -141,24 +120,40 @@ export function startDshxStdioTransport({
     return closePromise;
   };
 
-  lines.once('close', () => {
-    const naturalEof = !closing;
+  handleNaturalEof = () => {
+    if (eofTriggered || closing) return;
+    eofTriggered = true;
     readClosed = true;
-    if (!naturalEof) return;
+    diagnostics('stdio input EOF; draining presentation requests');
     void close().then(
-      () => Promise.resolve(onEof()).catch((error) => transportFault(`stdio EOF callback failed: ${error instanceof Error ? error.message : String(error)}`)),
-      (error) => {
+      async () => {
+        diagnostics('stdio presentation drained; requesting host exit');
+        try {
+          await onEof();
+        } catch (error) {
+          transportFault(`stdio EOF callback failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      },
+      async (error) => {
         transportFault(`stdio shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
-        void Promise.resolve(onEof(error)).catch((callbackError) => transportFault(`stdio EOF callback failed: ${callbackError instanceof Error ? callbackError.message : String(callbackError)}`));
+        try {
+          await onEof(error);
+        } catch (callbackError) {
+          transportFault(`stdio EOF callback failed: ${callbackError instanceof Error ? callbackError.message : String(callbackError)}`);
+        }
       }
     );
+  };
+
+  // The underlying stream's `end` is the authoritative EOF fact. readline's
+  // `close` remains a fallback for Readable implementations that close the
+  // interface without first surfacing `end`.
+  input.once('end', handleNaturalEof);
+  lines.once('close', () => {
+    if (!closing) handleNaturalEof();
   });
 
-  return Object.freeze({
-    mode: 'stdio',
-    close,
-    send
-  });
+  return Object.freeze({ mode: 'stdio', close, send });
 }
 
 export const internals = { parseError, internalError };
