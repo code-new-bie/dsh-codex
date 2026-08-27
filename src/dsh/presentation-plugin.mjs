@@ -3,20 +3,15 @@ import { spawn } from 'node:child_process';
 import process from 'node:process';
 import z from '@deepseek-ai/schemastery';
 import { startDshxLocalServer } from './local-server.mjs';
+import { startDshxStdioTransport } from './stdio-transport.mjs';
 
 /**
- * dshx-presentation — the surface's transport host row.
+ * dshx-presentation — the surface's presentation transport row.
  *
- * Loaded by the Cordis loader through the bundle patch (no dynamic mounting):
- * it starts the packaged bridge + adapter transport against the ALREADY-BOOTED
- * composition of whatever DSH installation hosts this profile — zero harness
- * builds are imported from our own package, so the surface is version-agnostic
- * and rides the user's installation like any official row.
- *
- * Interactive attachment (spawning the pinned Codex TUI on this terminal) is
- * opt-in per launching context via `launch.attach`: entries with TUI-correct
- * signal semantics set it; bare passive launches serve the endpoint with a
- * visible listening hint instead.
+ * Both migration-era transports run against the ALREADY-BOOTED composition of
+ * whatever DSH installation hosts this profile. The new stdio app-server mode
+ * is the target architecture; the local bridge remains temporarily available
+ * until the pinned Codex TUI is switched to spawn an external stdio backend.
  */
 
 /** Stable Cordis plugin name. */
@@ -25,17 +20,20 @@ export const name = 'dshx-presentation';
 /** The startup row's service is a hard prerequisite for the transport. */
 export const inject = ['dshxStartup'];
 
-/** Static overrides straight from the patch row; everything else flows via dshxStartup. */
+/** Static legacy socket override retained only during the bridge migration. */
 export const Config = z.object({
   socketRoot: z.string()
 });
 
-/** Service key published on the Context after the endpoint is ready. */
+/** Service key published on the Context after the transport is ready. */
 export const SERVICE_KEY = 'dshxPresentation';
 
 /** Test seams mirroring the official packages' `internals` convention. */
 export const internals = {
+  // `start` is kept as the legacy alias so downstream migration tests do not
+  // need to change in the same commit that introduces stdio.
   start: startDshxLocalServer,
+  startStdio: startDshxStdioTransport,
   spawn,
   isInteractive: () => process.stdout.isTTY === true && process.stdin.isTTY === true
 };
@@ -48,6 +46,26 @@ function parseTuiArgs(environment) {
   } catch {
     return [];
   }
+}
+
+function appExit(ctx) {
+  if (typeof ctx?.get === 'function') {
+    const value = ctx.get('appExit');
+    if (typeof value === 'function') return value;
+  }
+  return typeof ctx?.appExit === 'function' ? ctx.appExit : undefined;
+}
+
+function requestHostExit(ctx, code, log) {
+  const exit = appExit(ctx);
+  if (exit) {
+    exit(code);
+    return;
+  }
+  // Tests/embedding hosts may omit the launcher's optional appExit seam. Do
+  // not hard-exit from a Cordis row; record the status and let the host decide.
+  process.exitCode = code;
+  log(`DSH launcher did not provide appExit; recorded process.exitCode=${code}`);
 }
 
 function attachTui(launch, server, log) {
@@ -67,8 +85,7 @@ function attachTui(launch, server, log) {
     windowsHide: false
   });
   // SIGTERM propagates for lifecycle shutdown. SIGINT is intentionally left to
-  // the TUI: in raw mode Ctrl+C arrives as a key event (turn interrupt), so no
-  // signal ever reaches the hosting composition during normal interaction.
+  // the TUI: in raw mode Ctrl+C arrives as a key event (turn interrupt).
   process.once('SIGTERM', () => {
     if (!child.killed) child.kill('SIGTERM');
   });
@@ -95,6 +112,25 @@ export async function apply(ctx, config = {}) {
   const debug = launch.debug === true;
   const log = debug ? (message) => process.stderr.write(`[dshx] ${message}\n`) : () => {};
 
+  if (launch.appServer === true) {
+    const transport = await internals.startStdio({
+      ctx,
+      cwd: launch.cwd,
+      home: launch.home,
+      version: launch.version,
+      diagnostics: log,
+      onEof: (error) => requestHostExit(ctx, error ? 1 : 0, log)
+    });
+    ctx.provide(SERVICE_KEY, {
+      mode: 'stdio',
+      close: transport.close,
+      tuiCommand: launch.tuiCommand
+    });
+    // Cordis owns row lifetime. Initialization returns immediately with the
+    // disposer; stdin EOF requests bounded host exit through appExit.
+    return transport.close;
+  }
+
   const server = await internals.start({
     cwd: launch.cwd,
     home: launch.home,
@@ -103,8 +139,7 @@ export async function apply(ctx, config = {}) {
     socketRoot: config.socketRoot,
     // The composition Context already exists; never double-boot. Root-fiber
     // disposal stays owned by the composition, so the transport must not
-    // dispose the runtime it lives in (double teardown would re-enter the
-    // Fiber from inside its own disposer).
+    // dispose the runtime it lives in.
     runtime: ctx,
     disposeRuntimeOnClose: false,
     log
@@ -119,10 +154,17 @@ export async function apply(ctx, config = {}) {
       const handle = attachTui(launch, server, log);
       tuiExit = handle.exit;
       attached = true;
+      // Never await the child from plugin apply(): adapter readiness waits for
+      // loader.await(), which in turn requires this row to finish mounting.
+      // Request official bounded exit after the TUI leaves instead.
+      void tuiExit.then(({ code, signal }) => {
+        requestHostExit(ctx, code ?? (signal ? 1 : 0), log);
+      });
     }
   }
 
   ctx.provide(SERVICE_KEY, {
+    mode: 'bridge',
     path: server.path,
     url: server.url,
     close: server.close,
@@ -136,9 +178,6 @@ export async function apply(ctx, config = {}) {
     process.stderr.write(`[dshx] surface listening at ${server.url} — start the interactive TUI with \`dshx\`\n`);
   }
 
-  // Keep the row active for as long as the UI lives (same ownership shape as
-  // the headless runner awaiting quiescence); disposal closes the transport.
-  if (tuiExit) await tuiExit;
   return server.close;
 }
 
