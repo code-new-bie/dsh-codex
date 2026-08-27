@@ -4,6 +4,12 @@
 # for the Loader tree to settle, launches the pinned native TUI, and binds its
 # inherited fd 3 protocol pipe directly to the live DSH Context.
 
+# Match the official headless CLI-surface pattern: the shared module HMR row is
+# not part of the interactive runner. The profile launcher's watch fallback
+# remains responsible for user patch layers during the process lifetime.
+- id: hmr
+  disabled: true
+
 - insert:
     - id: dshx-startup
       name: '@code-new-bie/dshx-tui/startup'

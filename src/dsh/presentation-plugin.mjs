@@ -92,7 +92,9 @@ export function apply(ctx) {
 
   const launchTui = async () => {
     const loader = ctx.get('loader');
+    log('waiting for official DSH Loader settlement');
     await loader?.await?.();
+    log('official DSH Loader settled; launching native TUI');
     if (state.closing) return;
 
     fs.mkdirSync(launch.home, { recursive: true, mode: 0o700 });
@@ -115,6 +117,7 @@ export function apply(ctx) {
       windowsHide: false
     });
     state.child = child;
+    log(`native TUI child spawned with protocol fd ${PROTOCOL_FD}`);
 
     const protocol = child.stdio?.[PROTOCOL_FD];
     if (!protocol || typeof protocol.on !== 'function' || typeof protocol.write !== 'function') {
@@ -137,6 +140,7 @@ export function apply(ctx) {
         }
       }
     });
+    log('fd3 presentation transport bound to live DSH Context');
 
     child.once('error', (error) => {
       void finish(1, `native TUI spawn failed: ${error.message}`);
