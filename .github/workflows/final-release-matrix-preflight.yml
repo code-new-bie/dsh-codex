@@ -49,10 +49,14 @@ jobs:
       - name: Build pinned TUI (Unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          DSHX_VERSION: 1.0.0-ci
         run: bash scripts/build-codex-tui.sh
       - name: Build pinned TUI (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          DSHX_VERSION: 1.0.0-ci
         run: ./scripts/build-codex-tui.ps1
       - name: Verify profile-owned directional-pipe thin-fork invariants
         run: node scripts/verify-tui-invariants.mjs
