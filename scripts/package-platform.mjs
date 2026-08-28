@@ -19,6 +19,15 @@ const sourceLock = JSON.parse(sourceLockBytes.toString('utf8'));
 const sourceLockRoot = sourceLock.packages?.[''];
 if (!sourceLockRoot) throw new Error('Frozen package-lock.json has no root package record');
 
+const exactDshVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const testedDshVersion = rootPackage.devDependencies?.['@deepseek-ai/dsh']
+  ?? Object.entries(rootPackage.peerDependencies ?? {})
+    .find(([name, value]) => name.startsWith('@deepseek-ai/dsh-') && exactDshVersion.test(String(value)))?.[1]
+  ?? rootPackage.dependencies?.['@deepseek-ai/dsh'];
+if (typeof testedDshVersion !== 'string' || !exactDshVersion.test(testedDshVersion)) {
+  throw new Error(`Unable to derive one exact tested DSH release from the source manifest: ${JSON.stringify(testedDshVersion)}`);
+}
+
 const version = process.env.DSHX_VERSION || rootPackage.version;
 const platform = process.platform;
 const arch = process.arch;
@@ -135,10 +144,15 @@ delete shrinkwrapRoot.devDependencies;
 const shrinkwrapPath = path.join(stage, 'npm-shrinkwrap.json');
 fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
 
+// The stage intentionally has no source-only devDependency from which to infer
+// the tested release. Bind its closure check to the exact baseline already
+// derived from the reviewed source manifest instead of weakening the check.
 execFileSync(process.execPath, [
   path.join(root, 'scripts', 'verify-dsh-closure.mjs'),
   stage,
-  shrinkwrapPath
+  shrinkwrapPath,
+  '--expected',
+  testedDshVersion
 ], { cwd: root, stdio: 'inherit' });
 
 const packArgs = ['pack', stage, '--pack-destination', out, '--json'];
@@ -166,10 +180,6 @@ if (path.resolve(sourceTarball) !== path.resolve(targetTarball)) {
   fs.renameSync(sourceTarball, targetTarball);
 }
 
-const testedDshVersion = rootPackage.devDependencies?.['@deepseek-ai/dsh']
-  ?? Object.entries(rootPackage.peerDependencies ?? {})
-    .find(([name, value]) => name.startsWith('@deepseek-ai/dsh-') && /^\d/.test(String(value)))?.[1]
-  ?? rootPackage.peerDependencies?.['@deepseek-ai/dsh'];
 const metadata = {
   version,
   platform,
