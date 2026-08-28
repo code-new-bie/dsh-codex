@@ -28,6 +28,7 @@ if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml') {
 if (!manifest.exports?.['./presentation'] || !manifest.exports?.['./startup']) {
   throw new Error('package exports must expose the two Cordis surface rows');
 }
+if (manifest.dependencies?.ws) throw new Error('ws must never be a production dependency');
 
 // Every DSH package belongs to the user's official installation. DSHX may
 // depend on non-DSH leaf helpers, but it must never install a second Harness
@@ -51,7 +52,13 @@ for (const name of runtimePeers) {
 }
 
 // There is exactly one runtime owner: the user's official dsh launcher/profile.
-for (const retired of ['src/dsh/runtime-boot.mjs', 'src/dsh/local-server.mjs']) {
+for (const retired of [
+  'src/dsh/runtime-boot.mjs',
+  'src/dsh/local-server.mjs',
+  'bin/dshx-stub-local.mjs',
+  'devtools/dshx-stub-server.mjs',
+  'devtools/stub-server.mjs'
+]) {
   if (existsSync(retired)) throw new Error(`${retired} must stay deleted; DSHX cannot own a runtime/socket host`);
 }
 requireText('src/dsh/profile-bootstrap.mjs', "'plugin', '--profile'");

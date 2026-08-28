@@ -49,11 +49,11 @@ jobs:
         run: corepack enable pnpm
       - name: Boot and dispose official DeepSeek Harness composition
         run: node scripts/runtime-smoke.mjs
-      - name: Syntax check shipped JavaScript
+      - name: Syntax check shipped and development JavaScript
         shell: bash
         run: |
           set -euo pipefail
-          while IFS= read -r file; do node --check "$file"; done < <(find src bin scripts -type f -name '*.mjs' -print | sort)
+          while IFS= read -r file; do node --check "$file"; done < <(find src bin scripts devtools test -type f \( -name '*.mjs' -o -name '*.js' \) -print | sort)
       - name: Syntax check PTY smoke
         run: python3 -m py_compile test/tui_smoke.py
 
