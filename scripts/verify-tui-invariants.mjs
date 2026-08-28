@@ -94,4 +94,11 @@ for (const needle of ['DSHX_APP_SERVER_INPUT_FD', 'DSHX_TERMINAL_INPUT_FD', 'DSH
 
 const pkg = JSON.parse(read('package.json'));
 if (pkg.dependencies?.ws) throw new Error('ws must not be a production dependency');
+
+// Every native build gate also verifies the complete pinned slash-command
+// classification. This script requires the materialized Codex tree, so keeping
+// it behind the thin-fork build makes the release-readiness requirement real on
+// Linux, Windows, macOS and tagged release matrices without duplicating workflow steps.
+await import('./verify-slash-contract.mjs');
+
 console.log('DSHX pinned TUI profile-owned directional pipe invariants verified');
