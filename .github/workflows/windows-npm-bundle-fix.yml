@@ -5,11 +5,10 @@ on:
     branches: ['automation/windows-npm-bundle-fix']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
-    if: ${{ !contains(github.event.head_commit.message, '[windows-npm-fixed]') }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -23,44 +22,10 @@ jobs:
         run: npm ci --include=optional --ignore-scripts=false
       - name: Enable official profile machinery
         run: corepack enable pnpm
-      - name: Patch bundle verifier to execute npm CLI through Node on Windows
-        shell: pwsh
+      - name: Verify validated source shape
         run: |
-          @'
-          const fs = require('node:fs');
-          const file = 'scripts/verify-bundle-install.mjs';
-          let source = fs.readFileSync(file, 'utf8');
-          function replaceOnce(from, to, label) {
-            const count = source.split(from).length - 1;
-            if (count !== 1) throw new Error(`${label}: expected exactly one fragment, got ${count}`);
-            source = source.replace(from, to);
-          }
-          replaceOnce(
-            `function run(command, args, { cwd = ROOT, env = process.env, check = true } = {}) {\n  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8' });\n  if (check && result.status !== 0) {\n    throw new Error(\`${'${command}'} ${'${args.join(\' \')}'} failed (exit ${'${result.status}'}):\\n${'${result.stderr || result.stdout}'}\`);\n  }\n  return result;\n}\n`,
-            `function run(command, args, { cwd = ROOT, env = process.env, check = true } = {}) {\n  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8' });\n  if (result.error) throw result.error;\n  if (check && result.status !== 0) {\n    throw new Error(\`${'${command}'} ${'${args.join(\' \')}'} failed (exit ${'${result.status}'}):\\n${'${result.stderr || result.stdout}'}\`);\n  }\n  return result;\n}\n\nfunction npmInvocation(args) {\n  if (process.platform !== 'win32') return ['npm', args];\n  const candidates = [\n    process.env.npm_execpath,\n    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')\n  ].filter(Boolean);\n  const npmCli = candidates.find((candidate) => fs.existsSync(candidate));\n  if (!npmCli) {\n    throw new Error(\`Unable to locate npm CLI for shell-free Windows execution; checked: ${'${candidates.join(\', \')}'}\`);\n  }\n  return [process.execPath, [npmCli, ...args]];\n}\n`,
-            'run helper'
-          );
-          replaceOnce(
-            `    const packed = run('npm', ['pack', '--pack-destination', packDir, '--loglevel', 'error']);\n`,
-            `    const [npmCommand, npmArgs] = npmInvocation(['pack', '--pack-destination', packDir, '--loglevel', 'error']);\n    const packed = run(npmCommand, npmArgs);\n`,
-            'npm pack invocation'
-          );
-          fs.writeFileSync(file, source);
-          '@ | node
           node --check scripts/verify-bundle-install.mjs
           node scripts/verify-lock-root.mjs
           node scripts/verify-dsh-closure.mjs . package-lock.json
       - name: Prove source bundle install and profile activation on Windows
         run: node scripts/verify-bundle-install.mjs
-      - name: Commit validated fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          changed="$(git status --porcelain | awk '{print $2}')"
-          [[ "$changed" == "scripts/verify-bundle-install.mjs" ]] || { echo "unexpected changed files: $changed" >&2; exit 1; }
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts/verify-bundle-install.mjs
-          git commit -m 'fix(ci): run npm shell-free on Windows bundle checks [windows-npm-fixed]'
-          git push origin HEAD:automation/windows-npm-bundle-fix
