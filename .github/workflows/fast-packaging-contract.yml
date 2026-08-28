@@ -1,0 +1,114 @@
+name: Fast Packaging Contract
+
+on:
+  push:
+    branches: ['automation/fast-packaging-1f661252']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package contract / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: windows-latest
+            label: windows-x64
+          - os: macos-26
+            label: macos-arm64
+          - os: macos-26-intel
+            label: macos-x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 1f66125248bb8ab1c23c9c440f2eb99ae45cf4ae
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 1f66125248bb8ab1c23c9c440f2eb99ae45cf4ae
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install frozen graph and profile tooling
+        run: |
+          npm ci --include=optional --ignore-scripts=false
+          node scripts/verify-lock-root.mjs
+          node scripts/verify-dsh-closure.mjs . package-lock.json
+          corepack enable pnpm
+      - name: Prepare packaging-only native placeholders (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/bin .upstream/codex
+          printf '#!/bin/sh\nexit 0\n' > dist/bin/dshx-tui
+          chmod +x dist/bin/dshx-tui
+          printf 'Apache-2.0 packaging contract placeholder\n' > .upstream/codex/LICENSE
+      - name: Prepare packaging-only native placeholders (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\bin | Out-Null
+          New-Item -ItemType Directory -Force .upstream\codex | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'dist\bin\dshx-tui.exe'), [byte[]](0x4D,0x5A,0x00,0x00))
+          Set-Content -Path .upstream\codex\LICENSE -Value 'Apache-2.0 packaging contract placeholder'
+      - name: Build strict platform package
+        run: node scripts/package-platform.mjs
+      - name: Verify release bundle through official DSH profile
+        env:
+          DSHX_REQUIRE_RELEASE: '1'
+        run: node scripts/verify-bundle-install.mjs
+      - name: Clean install contract (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
+          test -n "$TGZ"
+          PREFIX="$RUNNER_TEMP/dshx-fast-package"
+          npm install --global --prefix "$PREFIX" --include=optional --ignore-scripts=false "$TGZ"
+          if npm ls --global --prefix "$PREFIX" @deepseek-ai/dsh --depth=0 >/dev/null 2>&1; then
+            echo 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' >&2
+            exit 1
+          fi
+          export DSHX_DSH_BIN="$PWD/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          "$PREFIX/bin/dshx" --version | grep -F '0.0.0-m1'
+      - name: Clean install contract (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tgz = Get-ChildItem dist\release\dshx-*.tgz | Select-Object -First 1
+          if (-not $tgz) { throw 'platform tarball missing' }
+          $prefix = Join-Path $env:RUNNER_TEMP 'dshx-fast-package'
+          npm install --global --prefix $prefix --include=optional --ignore-scripts=false $tgz.FullName
+          & npm ls --global --prefix $prefix '@deepseek-ai/dsh' --depth=0 *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' }
+          $env:DSHX_DSH_BIN = (Resolve-Path 'node_modules\@deepseek-ai\dsh\lib\bin.js').Path
+          $version = & (Join-Path $prefix 'dshx.cmd') --version
+          if (-not ($version -match [regex]::Escape('0.0.0-m1'))) { throw "wrong dshx version: $version" }
+      - name: Verify provenance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          const files = fs.readdirSync('dist/release').filter((f) => f.endsWith('.tgz.json'));
+          if (files.length !== 1) throw new Error(`expected one sidecar, got ${files}`);
+          const record = JSON.parse(fs.readFileSync(path.join('dist/release', files[0]), 'utf8'));
+          const lockHash = crypto.createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex');
+          if (record.sourceLockSha256 !== lockHash) throw new Error('source lock provenance mismatch');
+          if (record.transport !== 'profile-directional-pipes') throw new Error(`transport mismatch: ${record.transport}`);
+          if (record.dependencyGraph !== 'source-package-lock') throw new Error(`dependency graph mismatch: ${record.dependencyGraph}`);
+          if (record.dshVersion !== '0.1.0-rc.8') throw new Error(`tested DSH mismatch: ${record.dshVersion}`);
+          if (record.dshHostRange !== '>=0.1.0-rc.8') throw new Error(`host range mismatch: ${record.dshHostRange}`);
+          console.log(`packaging contract verified: ${files[0]}`);
+          NODE
