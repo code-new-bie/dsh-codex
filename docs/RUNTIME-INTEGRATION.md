@@ -2,124 +2,96 @@
 
 ## Decision
 
-DSHX reuses the same architectural seam that official DeepSeek Harness uses for its headless product: a direct Cordis/core entry point over the official DSH composition, without requiring the WebUI/browser runtime for normal terminal use.
+DSHX is a **DSH profile surface**, not an application that embeds or launches a private Harness runtime. The user's installed `dsh --profile tui` process owns the Cordis Loader tree and all runtime services. DSHX contributes a startup row, a presentation row, protocol projection code and the pinned native TUI.
 
-The TUI remains project-owned. DeepSeek Harness remains upstream-owned.
+The tested development closure is DSH `0.1.0-rc.8`, but production compatibility is host-driven. Runtime peer declarations use a compatibility floor and remain optional advisory peers so installing DSHX cannot materialize a second Harness runtime into the profile.
 
-Tested official DSH line for the current release branch: `0.1.0-rc.8`. The
-plugin is host-version agnostic at runtime — it composes inside whatever
-DeepSeek Harness installation hosts the profile, and an untested line only
-produces a one-shot startup warning (never a block).
-Pinned DSH source reference: `141eb6fef83422698aef7a981029e843e8161534`.
+## Lifecycle
 
-The official runtime owns Agent creation/resume, Session persistence, model selection/routing, tools, approvals, permission policy, skills, subagents and every other capability surface. DSHX generalizes only the **presentation lifetime** from a headless/one-shot consumer into an interactive terminal frontend.
+1. `dshx` resolves the user's DSH launcher and idempotently ensures this package is installed into the selected profile through `dsh plugin --profile <p> add <package>`.
+2. `dshx` starts `dsh --profile <p> ...` with the user's arguments unchanged.
+3. The Loader composes `dshx-startup` and `dshx-presentation` from `cordis.patch.yml`.
+4. `dshx-startup` reads official `cmdlineArgs` and publishes presentation facts (`cwd`, presentation home, package version, TUI args).
+5. `dshx-presentation` waits for Loader settlement and starts the packaged native TUI as its child.
+6. The presentation row binds anonymous directional child pipes directly to the live DSH Context through `startDshxStdioTransport`.
+7. The TUI speaks the pinned Codex app-server-compatible JSONL dialect across those pipes; the adapter translates to DSH public services/events.
+8. TUI exit requests official `appExit`, so the DSH launcher disposes the root composition and remains the sole teardown authority.
 
-## Production topology
+## Descriptor contract
+
+The DSH parent uses Node's supported directional stdio semantics:
 
 ```text
-┌──────────────────────────────────────────┐
-│ dshx Node launcher                       │
-│  - boots official DSH composition        │
-│  - mounts dshx-presentation plugin row   │
-│  - owns child-process lifetime only      │
-└────────────────────┬─────────────────────┘
-                     │
-                     │ DSH public APIs/events
-                     ▼
-┌──────────────────────────────────────────┐
-│ DSHX presentation adapter                │
-│  - Codex protocol projection only        │
-│  - mounted as the dshx-presentation      │
-│    Cordis plugin (name/inject/Config/    │
-│    apply), disposed by the root Fiber    │
-└────────────────────┬─────────────────────┘
-                     │ JSONL / child stdio
-                     ▼
-┌──────────────────────────────────────────┐
-│ dshx-ipc-bridge                          │
-│  - pinned Codex workspace binary         │
-│  - no agent/session/runtime state         │
-└────────────────────┬─────────────────────┘
-                     │ WebSocket framing over
-                     │ private local UDS only
-                     ▼
-┌──────────────────────────────────────────┐
-│ pinned Codex TUI thin fork               │
-│  presentation/input only                 │
-└──────────────────────────────────────────┘
+child fd0  protocol input   DSH → TUI
+child fd1  terminal stdout
+child fd2  terminal stderr
+child fd3  preserved terminal stdin
+child fd4  protocol output  TUI → DSH
 ```
 
-The bridge exists because the TUI is Rust and the official DSH composition is Node/TypeScript. It reuses Codex's own cross-platform `codex_uds` implementation rather than introducing unsafe FFI or a second runtime.
+Spawn configuration:
 
-## Why WebSocket framing is still present
+```js
+stdio: ['pipe', 'inherit', 'inherit', 0, 'pipe']
+```
 
-The pinned Codex app-server client speaks WebSocket frames for its remote transport abstraction, including its Unix-socket endpoint. DSHX keeps that framing but changes the production carrier:
+The native thin fork performs descriptor remapping before crossterm initializes:
 
-- **forbidden in production:** `ws://127.0.0.1:*`, TCP listeners, bearer-token loopback transport, user-facing Codex remote mode;
-- **production:** a private `unix://.../app.sock` endpoint implemented by `codex_uds`, with the bridge relaying JSON messages to Node over child stdio.
+- duplicate fd 0 to preserve protocol input;
+- restore fd 3 onto ordinary stdin;
+- on Unix, clear inherited `O_NONBLOCK` from the saved input and fd 4 before Tokio file I/O;
+- on Windows, restore both CRT fd 0 and `STD_INPUT_HANDLE`;
+- create `RemoteAppServerEndpoint::InheritedPipes { input_fd, output_fd }`.
 
-Therefore production does not depend on Codex's experimental TCP WebSocket remote mode, while the TUI can continue using the upstream protocol machinery with a minimal thin-fork patch.
+The app-server client reads from the saved input descriptor and writes to fd 4. It does not spawn a backend process.
 
-## Launcher lifecycle
+## No transport service
 
-`dshx` performs the following sequence:
+The production transport deliberately has no address and no listening service. DSHX does not use:
 
-1. Bootstrap the surface profile through the official plugin machinery: `dsh plugin --profile <p> add <package>` (idempotent — a profile already pinning this exact package version as a bundle layer is left untouched). The package manifest declares `dsh.bundle.patch`, so the loader picks the surface up as a real bundle layer.
-2. Boot the official DSH composition for that profile; the loader mounts the rows declared by the shipped `cordis.patch.yml` (`dshx-startup`, `dshx-presentation`) and locks the competing headless presentation rows.
-3. The startup row publishes launch parameters (presentation home, packaged binaries, version) as the `dshxStartup` service; the presentation row injects it, starts the local transport, and publishes the endpoint as the `dshxPresentation` service.
-4. Spawn `dshx-ipc-bridge`, wait for its readiness control message, and expose the resulting `unix://` endpoint to the TUI.
-5. Spawn the pinned Codex TUI with `DSHX_APP_SERVER_ENDPOINT` set to that local endpoint and an isolated presentation-only `CODEX_HOME`.
-6. Relay app-server JSON between the TUI and the DSH presentation adapter while DSH remains authoritative for all runtime state.
-7. On TUI exit or process shutdown, dispose the official Context: its root Fiber unwinds the presentation plugin (closing the transport and removing the temporary socket directory) — the Fiber is the sole teardown authority.
+- TCP/WebSocket remote mode;
+- Unix-domain sockets;
+- local socket rendezvous directories;
+- bearer-token loopback auth;
+- a Rust/Node bridge executable;
+- a Node local-server process.
 
-Ctrl+C is intentionally not intercepted by the Node launcher because it is an in-TUI interaction used to interrupt/steer the active DSH turn. Process `SIGTERM` is propagated for lifecycle shutdown.
+The process relationship itself provides the local trust/lifetime boundary.
 
-## What the adapter may do
+## Adapter authority
 
-- Create/resume Agents through official DSH services.
-- Forward follow-up, steering and cancellation to official Agent/subagent control APIs.
-- Subscribe to public Agent/Session events.
-- Read official session persistence/list/inspection surfaces.
-- Project DSH events into Codex Thread/Turn/Item UI events.
-- Keep disposable UI correlation state such as `DSH turn number → current Codex turn id`.
-- Translate a user decision from an upstream Codex picker into the corresponding official DSH approval/question API call without weakening it.
+The adapter may:
 
-## What the adapter must not do
+- create/resume Agents through official DSH services;
+- forward follow-up, steering, interrupt and subagent control;
+- subscribe to Agent/Session events;
+- read official persistence/session-query surfaces;
+- project those facts into Codex Thread/Turn/Item UI shapes;
+- keep disposable correlation state needed only for presentation;
+- translate approval/question UI responses to the matching DSH service.
 
-- Implement an agent loop.
-- Call model providers directly instead of DSH.
-- Execute tools or shell commands outside DSH.
-- Store a second durable transcript or session database.
-- Repair/replay sessions with DSHX-owned persistence logic.
-- Decide sandbox/approval policy.
-- Reimplement compaction, fork, skills, subagents, jobs or plugins.
-- Persist an independent model choice when DSH already owns selection.
+It must not:
 
-The test suite contains ownership guards for these boundaries. Missing official services are compatibility failures, not invitations to add shadow implementations.
+- implement an Agent loop;
+- call model providers directly;
+- execute tools/shell commands outside DSH;
+- store a second durable transcript;
+- reimplement session repair, compaction, fork, skills, subagents, jobs or plugins;
+- decide sandbox/approval policy;
+- persist independent model/runtime state when DSH owns it.
 
-## Development-only transport
+Missing required public services are compatibility errors, not extension points for shadow implementations.
 
-The historical deterministic protocol PoC (`devtools/protocol-poc.mjs`) and TCP/WebSocket stub (`devtools/stub-server.mjs`) remain useful test fixtures for protocol work, but they live outside the production `src/` tree and are not copied into the installable production package. The `ws` dependency is development-only.
+## Development and test topology
 
-The real TUI smoke test uses `bin/dshx-stub-local.mjs`, which drives the deterministic fixture through the same packaged local-IPC bridge as production.
+Protocol unit tests can instantiate deterministic adapters in-process. Real TUI PTY/ConPTY tests use `devtools/tui-stub-parent.mjs`: the **test parent** owns a deterministic protocol stub and launches the TUI with the same descriptor layout as production. This validates terminal stdin restoration, native directional-pipe transport, CJK input and resize without requiring provider credentials or network calls.
 
-## Diagnostics
+Separately, `scripts/runtime-smoke.mjs` and `scripts/verify-bundle-install.mjs` exercise the real official DSH profile and prove that Loader settlement, initialize, appExit and single-runtime ownership work through the same parent-owned pipe contract.
 
-`dshx doctor` validates:
+## Compatibility
 
-- supported Node runtime;
-- packaged pinned Codex TUI;
-- packaged `dshx-ipc-bridge`;
-- a real UDS + WebSocket `ping → pong` self-test using Codex's cross-platform UDS implementation;
-- official DSH bundle composition;
-- isolated DSHX presentation home.
+DSH and Codex are moving upstreams. The repository pins a tested source/package closure for reproducible CI and keeps Codex divergence as an ordered patch queue, but production resolves the actual DSH services from the host installation.
 
-A successful bridge self-test proves the local transport data plane on the current OS; it is stronger than merely checking that the binary exists.
+If an upstream DSH release removes a required public seam, DSHX adapts through another public seam or reports an incompatibility. It does not preserve compatibility by copying DSH internals.
 
-## Compatibility and upstream sync
-
-DSH and Codex are both moving upstreams. The repository pins source/package versions and keeps the Codex divergence as an ordered patch queue. Compatibility is defined by public capabilities actually exposed by the supported DSH line.
-
-If a DSH update removes a required public seam, that version is unsupported until DSHX can adapt through another official seam or DSH restores one. DSHX must not preserve compatibility by copying DSH internals.
-
-If a Codex update breaks a patch or app-server shape, the pin is advanced only after the patch queue, protocol tests, PTY smoke, packaging checks and UX parity gate are revalidated.
+A Codex pin is advanced only when the patch queue materializes cleanly and the core, native build, bundle, PTY/ConPTY, platform and UX-parity gates pass again.

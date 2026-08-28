@@ -88,7 +88,7 @@ const traceFile = path.join(os.tmpdir(), `dshx-conpty-trace-${process.pid}-${Dat
 let term;
 let dataDisposable;
 try {
-  term = pty.spawn(binary, [], {
+  term = pty.spawn(process.execPath, [path.join(ROOT, 'devtools', 'tui-stub-parent.mjs')], {
     name: 'xterm-256color',
     cols: 120,
     rows: 32,
@@ -96,8 +96,8 @@ try {
     env: stringEnv({
       TERM: 'xterm-256color',
       CODEX_HOME: codexHome,
+      DSHX_TUI_BIN: binary,
       DSHX_STUB_TRACE_FILE: traceFile,
-      DSHX_APP_SERVER_CMD: JSON.stringify([process.execPath, path.join(ROOT, 'bin', 'dshx-stub-local.mjs')]),
       CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT: '1'
     })
   });
@@ -122,7 +122,7 @@ try {
   term.write('\r');
   await waitForOutput(state, 'DSHX protocol stub received:');
   await waitForOutput(state, prompt);
-  process.stdout.write('Windows ConPTY DSHX stdio + CJK + resize smoke passed\n');
+  process.stdout.write('Windows ConPTY DSHX directional stdio + CJK + resize smoke passed\n');
 } finally {
   dataDisposable?.dispose?.();
   try { term?.kill(); } catch {}

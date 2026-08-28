@@ -37,14 +37,12 @@ if (-not (Test-Path -LiteralPath $dshx)) {
   throw "installed dshx launcher not found: $dshx"
 }
 
+# This is a thin DSH profile launcher; it intentionally has no private
+# `doctor` control plane. `--version` crosses the same official DSH profile and
+# native TUI startup path while terminating before an interactive session.
 $version = (& $dshx --version | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
-  throw 'installed dshx --version failed'
-}
-
-& $dshx doctor
-if ($LASTEXITCODE -ne 0) {
-  throw 'installed dshx doctor failed'
+  throw 'installed dshx --version failed; verify that official DeepSeek Harness is installed and resolvable'
 }
 
 Write-Host ''
@@ -54,7 +52,7 @@ Write-Host "SHA-256:  $actual"
 Write-Host "Version:  $version"
 Write-Host "Launcher: $dshx"
 Write-Host ''
-Write-Host 'Use this exact launcher for issue #12. In the project directory, run:'
+Write-Host 'Use this exact launcher in the project directory for Windows Terminal/IME acceptance:'
 Write-Host "  & '$dshx'"
 Write-Host ''
 Write-Host 'Do not replace the generated artifact with a source checkout during IME/visual acceptance.'

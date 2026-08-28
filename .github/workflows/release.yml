@@ -70,7 +70,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_ENV -Value "DSHX_VERSION=$($env:GITHUB_REF_NAME.TrimStart('v'))"
-      - name: Test presentation adapter from frozen graph
+      - name: Test standard DSH presentation bundle from frozen graph
         run: |
           npm ci --include=optional --ignore-scripts=false
           node scripts/verify-dsh-closure.mjs
@@ -78,7 +78,7 @@ jobs:
           node scripts/verify-ownership-boundary.mjs
       - name: Enable pnpm for official plugin machinery
         run: corepack enable pnpm
-      - name: Verify official DSH stdio lifecycle
+      - name: Verify official DSH profile lifecycle
         run: node scripts/runtime-smoke.mjs
       - name: Build pinned TUI (Unix)
         if: runner.os != 'Windows'
@@ -88,9 +88,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build-codex-tui.ps1
-      - name: Verify stdio thin-fork invariants
+      - name: Verify profile-owned directional-pipe thin-fork invariants
         run: node scripts/verify-tui-invariants.mjs
-      - name: Real pinned TUI stdio PTY + CJK + resize smoke
+      - name: Real pinned TUI PTY + CJK + resize smoke
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -99,12 +99,12 @@ jobs:
           python3 -m venv "$VENV"
           "$VENV/bin/python" -m pip install --disable-pip-version-check pexpect
           "$VENV/bin/python" test/tui_smoke.py
-      - name: Real pinned TUI Windows ConPTY + CJK stdio smoke
+      - name: Real pinned TUI Windows ConPTY + CJK smoke
         if: runner.os == 'Windows'
         run: node test/tui_smoke_windows.mjs
       - name: Build installable platform tarball
         run: node scripts/package-platform.mjs
-      - name: Verify release bundle install and stdio activation
+      - name: Verify release bundle install and profile activation
         env:
           DSHX_REQUIRE_RELEASE: '1'
         run: node scripts/verify-bundle-install.mjs
@@ -120,9 +120,8 @@ jobs:
             echo 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' >&2
             exit 1
           fi
-          "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
           export DSHX_DSH_BIN="$PWD/node_modules/@deepseek-ai/dsh/lib/bin.js"
-          "$PREFIX/bin/dshx" doctor
+          "$PREFIX/bin/dshx" --version | grep -F "$DSHX_VERSION"
       - name: Clean install smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -133,10 +132,9 @@ jobs:
           npm install --global --prefix $prefix --include=optional --ignore-scripts=false $tgz.FullName
           & npm ls --global --prefix $prefix '@deepseek-ai/dsh' --depth=0 *> $null
           if ($LASTEXITCODE -eq 0) { throw 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' }
+          $env:DSHX_DSH_BIN = (Resolve-Path 'node_modules\@deepseek-ai\dsh\lib\bin.js').Path
           $version = & (Join-Path $prefix 'dshx.cmd') --version
           if (-not ($version -match [regex]::Escape($env:DSHX_VERSION))) { throw "wrong dshx version: $version" }
-          $env:DSHX_DSH_BIN = (Resolve-Path 'node_modules\@deepseek-ai\dsh\lib\bin.js').Path
-          & (Join-Path $prefix 'dshx.cmd') doctor
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dshx-${{ matrix.label }}
@@ -175,7 +173,7 @@ jobs:
           baseline = {key: records[0][1].get(key) for key in keys}
           if baseline['version'] != expected_version:
               raise SystemExit(f"artifact version mismatch: expected {expected_version}, got {baseline['version']}")
-          if baseline['transport'] != 'local-stdio-child':
+          if baseline['transport'] != 'profile-directional-pipes':
               raise SystemExit(f"unexpected transport provenance: {baseline['transport']}")
           if baseline['dependencyGraph'] != 'source-package-lock':
               raise SystemExit(f"unexpected dependency graph provenance: {baseline['dependencyGraph']}")

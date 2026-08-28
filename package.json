@@ -41,7 +41,7 @@
     "freeze:deps": "node scripts/freeze-deps.mjs",
     "verify:release-deps": "node scripts/verify-dsh-closure.mjs . package-lock.json",
     "verify:bundle": "node scripts/verify-bundle-install.mjs",
-    "stub": "node ./devtools/dshx-stub-server.mjs",
+    "stub": "node ./devtools/tui-stub-parent.mjs",
     "dev": "node ./bin/dshx.mjs"
   },
   "dependencies": {

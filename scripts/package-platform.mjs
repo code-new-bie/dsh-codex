@@ -27,11 +27,6 @@ if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
 }
 
-// The lock may retain unreachable historical production nodes until the next
-// reviewed freeze. Every dependency still shipped by the current manifest must
-// nevertheless have the exact frozen root spec. The staged shrinkwrap below
-// rewrites its root dependency map to the current manifest, so retired extras
-// cannot become publishable dependencies.
 assertDependencySubset('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
 assertDependencyMap('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
 
@@ -50,9 +45,8 @@ function copy(relative) {
   fs.cpSync(from, to, { recursive: true });
 }
 
-// Ship the presentation closure only. The user's installed DSH owns every
-// stateful runtime service; DSHX contributes Cordis rows, protocol projection
-// code and the pinned TUI binary. There is no socket/bridge executable.
+// Ship only the presentation closure. DSH remains host-owned and no bridge,
+// local server or private Harness runtime is included in the artifact.
 copy('bin/dshx.mjs');
 copy('src/cli');
 copy('src/dsh');
@@ -108,7 +102,6 @@ const packageJson = {
 };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
-// Every relative production import must resolve from the staged package.
 const localImportPattern = /(?:from\s+|import\s*(?:\(\s*)?)["'](\.{1,2}\/[^"']+)["']/g;
 for (const file of walkJs(stage)) {
   const source = fs.readFileSync(file, 'utf8');
@@ -120,9 +113,8 @@ for (const file of walkJs(stage)) {
   }
 }
 
-// Derive the publishable shrinkwrap from the source lock; do not resolve a new
-// graph during packaging. Dev nodes and historical nodes may remain recorded
-// but are unreachable because the staged root exposes production dependencies only.
+// Derive the publishable shrinkwrap from the reviewed source lock. Historical
+// unreachable records may remain, but the staged root exposes production deps only.
 const shrinkwrap = structuredClone(sourceLock);
 shrinkwrap.name = packageJson.name;
 shrinkwrap.version = packageJson.version;
@@ -185,7 +177,7 @@ const metadata = {
   dshHostRange: rootPackage.peerDependencies?.['@deepseek-ai/dsh'] ?? null,
   codexCommit: fs.readFileSync(path.join(root, 'upstream', 'CODEX_COMMIT'), 'utf8').trim(),
   dshCommit: fs.readFileSync(path.join(root, 'upstream', 'DSH_COMMIT'), 'utf8').trim(),
-  transport: 'local-stdio-child',
+  transport: 'profile-directional-pipes',
   dependencyGraph: 'source-package-lock',
   sourceLockSha256,
   tarball: path.basename(targetTarball)

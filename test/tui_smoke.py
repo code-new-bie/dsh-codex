@@ -57,16 +57,13 @@ try:
         env.update({
             "TERM": "xterm-256color",
             "CODEX_HOME": codex_home,
+            "DSHX_TUI_BIN": str(binary),
             "DSHX_STUB_TRACE_FILE": str(trace_path),
-            "DSHX_APP_SERVER_CMD": json.dumps([
-                os.environ.get("NODE", "node"),
-                str(ROOT / "bin" / "dshx-stub-local.mjs"),
-            ]),
-            # pexpect is a PTY transport rather than a full terminal emulator.
             "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "1",
         })
         child = pexpect.spawn(
-            str(binary),
+            env.get("NODE", "node"),
+            [str(ROOT / "devtools" / "tui-stub-parent.mjs")],
             cwd=str(ROOT),
             env=env,
             encoding="utf-8",
@@ -100,7 +97,7 @@ try:
             transcript.append(child.before or "")
             trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
             raise AssertionError(
-                "Pinned DSHX TUI stdio/CJK/resize smoke failed.\n"
+                "Pinned DSHX TUI directional-stdio/CJK/resize smoke failed.\n"
                 f"Protocol trace:\n{trace}\n"
                 "Transcript:\n" + "".join(transcript)
             )

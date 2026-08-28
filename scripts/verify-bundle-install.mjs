@@ -12,7 +12,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const NAME = PACKAGE.name;
 const PROFILE = 'tui';
-const CLIENT = path.join(ROOT, 'scripts', 'fd3-smoke-client.mjs');
+const CLIENT = path.join(ROOT, 'scripts', 'profile-pipe-smoke-client.mjs');
 
 function fail(message) {
   console.error(`\n[verify-bundle] FAIL: ${message}`);
@@ -31,7 +31,7 @@ async function probeProfileSurface({ dsh, cwd, env, profile = PROFILE, timeoutMs
   return await new Promise((resolve, reject) => {
     const child = spawn(dsh.command, [...dsh.args, '--profile', profile, CLIENT], {
       cwd,
-      env: { ...env, DSHX_TUI_BIN: process.execPath },
+      env: { ...env, DSHX_TUI_BIN: process.execPath, DSHX_DEBUG: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     });
@@ -58,12 +58,12 @@ async function probeProfileSurface({ dsh, cwd, env, profile = PROFILE, timeoutMs
         finish(new Error(`profile-owned TUI failed (code ${code ?? '?'} signal ${signal ?? '-'})${stderr ? `:\n${stderr}` : ''}`));
         return;
       }
-      const marker = stdout.split(/\r?\n/).find((line) => line.startsWith('DSHX_FD3_SMOKE '));
+      const marker = stdout.split(/\r?\n/).find((line) => line.startsWith('DSHX_PROFILE_PIPE_SMOKE '));
       if (!marker) {
-        finish(new Error(`presentation child never completed fd3 initialize${stderr ? `:\n${stderr}` : ''}`));
+        finish(new Error(`presentation child never completed directional-pipe initialize${stderr ? `:\n${stderr}` : ''}`));
         return;
       }
-      finish(null, JSON.parse(marker.slice('DSHX_FD3_SMOKE '.length)));
+      finish(null, JSON.parse(marker.slice('DSHX_PROFILE_PIPE_SMOKE '.length)));
     });
   });
 }
@@ -116,7 +116,9 @@ async function verifyInstall(specifier, label) {
   };
   for (const key of [
     'DSHX_APP_SERVER_CMD', 'DSHX_APP_SERVER_ENDPOINT', 'DSHX_APP_SERVER_TOKEN',
-    'DSHX_IPC_BRIDGE_BIN', 'DSHX_ATTACH', 'DSHX_HEADLESS', 'DSHX_TUI_ARGS'
+    'DSHX_IPC_BRIDGE_BIN', 'DSHX_APP_SERVER_FD', 'DSHX_APP_SERVER_INPUT_FD',
+    'DSHX_APP_SERVER_OUTPUT_FD', 'DSHX_TERMINAL_INPUT_FD', 'DSHX_ATTACH',
+    'DSHX_HEADLESS', 'DSHX_TUI_ARGS'
   ]) delete env[key];
 
   try {
@@ -135,7 +137,7 @@ async function verifyInstall(specifier, label) {
       throw new Error(`unexpected initialize identity: ${JSON.stringify(initialized)}`);
     }
     assertSingleRuntime(home);
-    console.log(`[verify-bundle] ${label} ok: official profile -> presentation child fd3 -> ${initialized.userAgent}`);
+    console.log(`[verify-bundle] ${label} ok: official profile -> presentation child directional pipes -> ${initialized.userAgent}`);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
