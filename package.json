@@ -39,7 +39,7 @@
     "test:protocol": "node --test --test-force-exit test/protocol.test.mjs test/wire.test.mjs",
     "test:dsh": "node --test --test-force-exit \"test/dsh-*.test.mjs\"",
     "freeze:deps": "node scripts/freeze-deps.mjs",
-    "verify:release-deps": "node scripts/verify-dsh-closure.mjs . package-lock.json",
+    "verify:release-deps": "node scripts/verify-lock-root.mjs && node scripts/verify-dsh-closure.mjs . package-lock.json",
     "verify:bundle": "node scripts/verify-bundle-install.mjs",
     "stub": "node ./devtools/tui-stub-parent.mjs",
     "dev": "node ./bin/dshx.mjs"

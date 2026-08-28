@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { assertLockRootMatchesManifest } from './lock-root-contract.mjs';
 
 const root = path.resolve(process.argv[2] ?? process.cwd());
 const packagePath = path.join(root, 'package.json');
@@ -39,6 +40,18 @@ if (hostSpec !== expected && !hostSpec.includes(expected)) {
 }
 
 const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+// Source package-lock files are also the reviewed manifest freeze contract.
+// npm-shrinkwrap files produced for platform artifacts intentionally have a
+// different staged root (no devDependencies, platform os/cpu), so they keep
+// using the DSH closure check below rather than this source-root assertion.
+if (
+  path.basename(lockPath) === 'package-lock.json' &&
+  typeof pkg.name === 'string' &&
+  typeof pkg.version === 'string'
+) {
+  assertLockRootMatchesManifest(pkg, lock, path.relative(root, lockPath) || 'package-lock.json');
+}
+
 const packages = lock.packages ?? {};
 const mismatches = [];
 let count = 0;
