@@ -14,12 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 44f89910800cc684a68f0b03f26590af9a271fe4
+          ref: 87007de34ffece955b0f90e296f03c45ec848e96
       - name: Verify exact source checkout
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 44f89910800cc684a68f0b03f26590af9a271fe4
+          test "$(git rev-parse HEAD)" = 87007de34ffece955b0f90e296f03c45ec848e96
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
