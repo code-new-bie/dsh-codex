@@ -9,31 +9,37 @@ if (!Number.isInteger(inputFd) || inputFd < 0 || !Number.isInteger(outputFd) || 
   throw new Error('DSHX profile-pipe smoke requires valid protocol input/output fds');
 }
 
-const input = fs.createReadStream(null, { fd: inputFd, autoClose: false });
+// `child_process.spawn(..., { stdio: ['pipe', ...] })` gives fd 0 to the
+// child as a libuv-managed nonblocking pipe on Unix. `fs.createReadStream()`
+// performs ordinary fs reads and can surface EAGAIN immediately; process.stdin
+// is the supported stream wrapper for this descriptor and waits correctly.
+const input = inputFd === 0
+  ? process.stdin
+  : fs.createReadStream(null, { fd: inputFd, autoClose: false });
+input.setEncoding('utf8');
 const lines = createInterface({ input, crlfDelay: Infinity, terminal: false });
 let settled = false;
-const timeout = setTimeout(() => {
+const timeout = setTimeout(() => finish(1, 'initialize timed out'), Number(process.env.DSHX_FD_SMOKE_TIMEOUT_MS ?? 30_000));
+
+function finish(code, detail) {
   if (settled) return;
   settled = true;
-  process.stderr.write('[fd-smoke] initialize timed out\n');
-  process.exitCode = 1;
-  lines.close();
-}, Number(process.env.DSHX_FD_SMOKE_TIMEOUT_MS ?? 30_000));
+  clearTimeout(timeout);
+  if (detail) process.stderr.write(`[fd-smoke] ${detail}\n`);
+  try { lines.close(); } catch {}
+  process.exitCode = code;
+}
 
 function send(message) {
-  fs.writeSync(outputFd, `${JSON.stringify(message)}\n`);
+  fs.writeSync(outputFd, `${JSON.stringify(message)}\n`, null, 'utf8');
 }
 
 lines.on('line', (line) => {
   let message;
   try { message = JSON.parse(line); } catch { return; }
   if (message?.id !== 'profile-pipe-smoke' || settled) return;
-  settled = true;
-  clearTimeout(timeout);
   if (message.error) {
-    process.stderr.write(`[fd-smoke] initialize rejected: ${message.error.message ?? JSON.stringify(message.error)}\n`);
-    process.exitCode = 1;
-    lines.close();
+    finish(1, `initialize rejected: ${message.error.message ?? JSON.stringify(message.error)}`);
     return;
   }
   send({ method: 'initialized', params: {} });
@@ -41,11 +47,16 @@ lines.on('line', (line) => {
   // `initialize` proves the Loader tree is already settled. Give rc.8's
   // launcher-owned post-boot watcher setup one bounded turn before child exit,
   // matching the steady-state lifecycle exercised by the real native TUI.
+  settled = true;
+  clearTimeout(timeout);
   setTimeout(() => {
-    lines.close();
+    try { lines.close(); } catch {}
     process.exitCode = 0;
   }, Number(process.env.DSHX_FD_SETTLE_MS ?? 300));
 });
+
+lines.on('error', (error) => finish(1, `protocol readline failed: ${error.message}`));
+input.on?.('error', (error) => finish(1, `protocol input failed: ${error.message}`));
 
 send({
   id: 'profile-pipe-smoke',
