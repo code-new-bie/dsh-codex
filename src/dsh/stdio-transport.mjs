@@ -23,7 +23,9 @@ function internalError(message, error) {
 }
 
 /**
- * Start a single-client Codex app-server transport directly on process stdio.
+ * Start a single-client Codex app-server transport over supplied readable and
+ * writable streams. Production supplies the presentation child's directional
+ * protocol pipes; process stdio remains only the default for direct/test use.
  * The adapter talks only to the already-mounted DSH Context supplied by the
  * hosting composition; this module never boots or disposes a Harness runtime.
  */
