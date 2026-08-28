@@ -1,24 +1,22 @@
 diff --git a/codex-rs/app-server-client/Cargo.toml b/codex-rs/app-server-client/Cargo.toml
 --- a/codex-rs/app-server-client/Cargo.toml
 +++ b/codex-rs/app-server-client/Cargo.toml
-@@ -1,1 +1,2 @@
- serde_json = { workspace = true }
-+libc = { workspace = true }
 @@ -1,1 +1,1 @@
 -tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process"] }
 +tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "fs"] }
 diff --git a/codex-rs/app-server-client/src/remote.rs b/codex-rs/app-server-client/src/remote.rs
 --- a/codex-rs/app-server-client/src/remote.rs
 +++ b/codex-rs/app-server-client/src/remote.rs
-@@ -1,3 +1,3 @@
+@@ -1,3 +1,4 @@
 -    StdioChild {
 -        command: Vec<String>,
-+    InheritedPipe {
-+        fd: i32,
++    InheritedPipes {
++        input_fd: i32,
++        output_fd: i32,
      },
 @@ -1,1 +1,1 @@
 -            RemoteAppServerEndpoint::StdioChild { .. } => Err(IoError::new(
-+            RemoteAppServerEndpoint::InheritedPipe { .. } => Err(IoError::new(
++            RemoteAppServerEndpoint::InheritedPipes { .. } => Err(IoError::new(
 diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-client/src/stdio.rs
 --- a/codex-rs/app-server-client/src/stdio.rs
 +++ b/codex-rs/app-server-client/src/stdio.rs
@@ -32,6 +30,8 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 +use std::os::windows::io::BorrowedHandle;
 +#[cfg(windows)]
 +use std::os::windows::io::RawHandle;
+@@ -1,1 +0,0 @@
+-use crate::SHUTDOWN_TIMEOUT;
 @@ -1,1 +1,4 @@
  use tokio::io::AsyncBufReadExt;
 +use tokio::fs::File as TokioFile;
@@ -46,10 +46,11 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 +
 +type BoxReader = Pin<Box<dyn AsyncRead + Send>>;
 +type BoxWriter = Pin<Box<dyn AsyncWrite + Send>>;
-@@ -1,1 +1,1 @@
+@@ -1,1 +2,2 @@
 -    pub command: Vec<String>,
-+    pub fd: i32,
-@@ -1,31 +1,14 @@
++    pub input_fd: i32,
++    pub output_fd: i32,
+@@ -1,31 +1,20 @@
 -        let executable = args.command.first().filter(|value| !value.is_empty()).ok_or_else(|| {
 -            IoError::new(ErrorKind::InvalidInput, "stdio app-server command must not be empty")
 -        })?;
@@ -72,16 +73,19 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 -        let stdout = child.stdout.take().ok_or_else(|| {
 -            IoError::new(ErrorKind::BrokenPipe, "stdio app-server stdout was not piped")
 -        })?;
-+        if args.fd < 3 {
-+            return Err(IoError::new(ErrorKind::InvalidInput, "DSHX protocol fd must be >= 3"));
++        if args.input_fd < 0 || args.output_fd < 0 || args.input_fd == args.output_fd {
++            return Err(IoError::new(
++                ErrorKind::InvalidInput,
++                "DSHX protocol input/output descriptors must be distinct non-negative fds",
++            ));
 +        }
-+        let stream = inherited_protocol_file(args.fd)?;
-+        let reader = stream.try_clone()?;
-+        let mut stdin: BoxWriter = Box::pin(TokioFile::from_std(stream));
-+        let stdout: BoxReader = Box::pin(TokioFile::from_std(reader));
++        let stdout_file = inherited_protocol_file(args.input_fd)?;
++        let stdin_file = inherited_protocol_file(args.output_fd)?;
++        let mut stdin: BoxWriter = Box::pin(TokioFile::from_std(stdin_file));
++        let stdout: BoxReader = Box::pin(TokioFile::from_std(stdout_file));
          let mut lines = BufReader::new(stdout).lines();
 -        let endpoint = format!("stdio://{}", executable);
-+        let endpoint = format!("fd://{}", args.fd);
++        let endpoint = format!("fds://{}/{}", args.input_fd, args.output_fd);
 @@ -1,17 +1,2 @@
                              StdioClientCommand::Shutdown { response_tx } => {
 -                                let mut result = stdin.shutdown().await;
@@ -115,7 +119,7 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 @@ -1,1 +1,1 @@
 -async fn write_jsonrpc_line(stdin: &mut ChildStdin, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
 +async fn write_jsonrpc_line(stdin: &mut BoxWriter, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
-@@ -1,3 +1,24 @@
+@@ -1,3 +1,29 @@
  fn deliver_event(event_tx: &mpsc::UnboundedSender<AppServerEvent>, event: AppServerEvent) -> IoResult<()> {
      event_tx.send(event).map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server event consumer is closed"))
  }
@@ -127,8 +131,13 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 +}
 +
 +#[cfg(windows)]
++unsafe extern "C" {
++    fn _get_osfhandle(fd: i32) -> isize;
++}
++
++#[cfg(windows)]
 +fn inherited_protocol_file(fd: i32) -> IoResult<StdFile> {
-+    let handle = unsafe { libc::get_osfhandle(fd) };
++    let handle = unsafe { _get_osfhandle(fd) };
 +    if handle == -1 {
 +        return Err(IoError::last_os_error());
 +    }
@@ -138,7 +147,94 @@ diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-clien
 diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 --- a/codex-rs/tui/src/main.rs
 +++ b/codex-rs/tui/src/main.rs
-@@ -1,14 +1,10 @@
+@@ -1,1 +1,87 @@
+-fn main() -> anyhow::Result<()> {
++#[cfg(unix)]
++fn dshx_make_blocking(fd: i32) -> anyhow::Result<()> {
++    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
++    if flags == -1 {
++        return Err(anyhow::anyhow!("failed to read DSHX pipe flags for fd {fd}: {}", std::io::Error::last_os_error()));
++    }
++    if flags & libc::O_NONBLOCK != 0 {
++        let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
++        if result == -1 {
++            return Err(anyhow::anyhow!("failed to clear O_NONBLOCK for DSHX fd {fd}: {}", std::io::Error::last_os_error()));
++        }
++    }
++    Ok(())
++}
++
++fn dshx_env_fd(name: &str) -> anyhow::Result<i32> {
++    std::env::var(name)
++        .map_err(|_| anyhow::anyhow!("{name} is required; DSHX never falls back to the Codex agent runtime"))?
++        .parse()
++        .map_err(|err| anyhow::anyhow!("invalid {name}: {err}"))
++}
++
++#[cfg(unix)]
++fn dshx_prepare_stdio(input_fd: i32, terminal_fd: i32, output_fd: i32) -> anyhow::Result<(i32, i32)> {
++    if input_fd != libc::STDIN_FILENO {
++        anyhow::bail!("DSHX_APP_SERVER_INPUT_FD must be child stdin (fd 0)");
++    }
++    if terminal_fd < 3 || output_fd < 3 || terminal_fd == output_fd {
++        anyhow::bail!("DSHX terminal/protocol output fds must be distinct inherited descriptors >= 3");
++    }
++    let saved_input = unsafe { libc::dup(input_fd) };
++    if saved_input < 0 {
++        return Err(anyhow::anyhow!("failed to preserve DSHX protocol input: {}", std::io::Error::last_os_error()));
++    }
++    if unsafe { libc::dup2(terminal_fd, libc::STDIN_FILENO) } < 0 {
++        unsafe { libc::close(saved_input) };
++        return Err(anyhow::anyhow!("failed to restore terminal stdin: {}", std::io::Error::last_os_error()));
++    }
++    dshx_make_blocking(saved_input)?;
++    dshx_make_blocking(output_fd)?;
++    Ok((saved_input, output_fd))
++}
++
++#[cfg(windows)]
++unsafe extern "C" {
++    fn _dup(fd: i32) -> i32;
++    fn _dup2(source: i32, target: i32) -> i32;
++    fn _close(fd: i32) -> i32;
++    fn _get_osfhandle(fd: i32) -> isize;
++}
++
++#[cfg(windows)]
++fn dshx_prepare_stdio(input_fd: i32, terminal_fd: i32, output_fd: i32) -> anyhow::Result<(i32, i32)> {
++    if input_fd != 0 {
++        anyhow::bail!("DSHX_APP_SERVER_INPUT_FD must be child stdin (fd 0)");
++    }
++    if terminal_fd < 3 || output_fd < 3 || terminal_fd == output_fd {
++        anyhow::bail!("DSHX terminal/protocol output fds must be distinct inherited descriptors >= 3");
++    }
++    let terminal_handle = unsafe { _get_osfhandle(terminal_fd) };
++    if terminal_handle == -1 {
++        return Err(anyhow::anyhow!("failed to resolve inherited terminal stdin: {}", std::io::Error::last_os_error()));
++    }
++    let saved_input = unsafe { _dup(input_fd) };
++    if saved_input < 0 {
++        return Err(anyhow::anyhow!("failed to preserve DSHX protocol input: {}", std::io::Error::last_os_error()));
++    }
++    if unsafe { _dup2(terminal_fd, 0) } != 0 {
++        unsafe { _close(saved_input) };
++        return Err(anyhow::anyhow!("failed to restore CRT terminal stdin: {}", std::io::Error::last_os_error()));
++    }
++    let restored = unsafe {
++        windows_sys::Win32::System::Console::SetStdHandle(
++            windows_sys::Win32::System::Console::STD_INPUT_HANDLE,
++            terminal_handle as _,
++        )
++    };
++    if restored == 0 {
++        unsafe { _close(saved_input) };
++        return Err(anyhow::anyhow!("failed to restore Win32 terminal stdin: {}", std::io::Error::last_os_error()));
++    }
++    Ok((saved_input, output_fd))
++}
++
++fn main() -> anyhow::Result<()> {
+@@ -1,14 +1,11 @@
 -        let dshx_command_json = std::env::var("DSHX_APP_SERVER_CMD").map_err(|_| {
 -            anyhow::anyhow!(
 -                "DSHX_APP_SERVER_CMD is required; DSHX never falls back to the Codex agent runtime"
@@ -148,51 +244,52 @@ diff --git a/codex-rs/tui/src/main.rs b/codex-rs/tui/src/main.rs
 -            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_CMD JSON: {err}"))?;
 -        if dshx_command.is_empty() || dshx_command[0].is_empty() {
 -            anyhow::bail!("DSHX_APP_SERVER_CMD must contain a non-empty executable argv[0]");
-+        let dshx_fd: i32 = std::env::var("DSHX_APP_SERVER_FD")
-+            .map_err(|_| anyhow::anyhow!("DSHX_APP_SERVER_FD is required; DSHX never falls back to the Codex agent runtime"))?
-+            .parse()
-+            .map_err(|err| anyhow::anyhow!("invalid DSHX_APP_SERVER_FD: {err}"))?;
-+        if dshx_fd < 3 {
-+            anyhow::bail!("DSHX_APP_SERVER_FD must be an inherited descriptor >= 3");
-         }
+-        }
 -        let dshx_endpoint = RemoteAppServerEndpoint::StdioChild {
 -            command: dshx_command,
-+        let dshx_endpoint = RemoteAppServerEndpoint::InheritedPipe {
-+            fd: dshx_fd,
++        let dshx_input_fd = dshx_env_fd("DSHX_APP_SERVER_INPUT_FD")?;
++        let dshx_terminal_fd = dshx_env_fd("DSHX_TERMINAL_INPUT_FD")?;
++        let dshx_output_fd = dshx_env_fd("DSHX_APP_SERVER_OUTPUT_FD")?;
++        let (dshx_input_fd, dshx_output_fd) =
++            dshx_prepare_stdio(dshx_input_fd, dshx_terminal_fd, dshx_output_fd)?;
++        let dshx_endpoint = RemoteAppServerEndpoint::InheritedPipes {
++            input_fd: dshx_input_fd,
++            output_fd: dshx_output_fd,
          };
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
 --- a/codex-rs/tui/src/lib.rs
 +++ b/codex-rs/tui/src/lib.rs
 @@ -1,1 +1,1 @@
 -        RemoteAppServerEndpoint::StdioChild { .. } => false,
-+        RemoteAppServerEndpoint::InheritedPipe { .. } => false,
-@@ -1,3 +1,3 @@
++        RemoteAppServerEndpoint::InheritedPipes { .. } => false,
+@@ -1,3 +1,4 @@
 -        RemoteAppServerEndpoint::StdioChild { command } => {
-+        RemoteAppServerEndpoint::InheritedPipe { fd } => {
++        RemoteAppServerEndpoint::InheritedPipes { input_fd, output_fd } => {
              let app_server = StdioAppServerClient::connect(StdioAppServerConnectArgs {
 -                command,
-+                fd,
++                input_fd,
++                output_fd,
 @@ -1,1 +1,1 @@
 -        Some(endpoint @ RemoteAppServerEndpoint::StdioChild { .. }) => {
-+        Some(endpoint @ RemoteAppServerEndpoint::InheritedPipe { .. }) => {
++        Some(endpoint @ RemoteAppServerEndpoint::InheritedPipes { .. }) => {
 @@ -1,1 +1,1 @@
 -    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
-+    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_INPUT_FD").is_some()
 diff --git a/codex-rs/tui/src/status/remote_connection.rs b/codex-rs/tui/src/status/remote_connection.rs
 --- a/codex-rs/tui/src/status/remote_connection.rs
 +++ b/codex-rs/tui/src/status/remote_connection.rs
 @@ -1,1 +1,1 @@
 -        RemoteAppServerEndpoint::StdioChild { .. } => return None,
-+        RemoteAppServerEndpoint::InheritedPipe { .. } => return None,
++        RemoteAppServerEndpoint::InheritedPipes { .. } => return None,
 diff --git a/codex-rs/tui/src/bottom_pane/approval_overlay.rs b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
 --- a/codex-rs/tui/src/bottom_pane/approval_overlay.rs
 +++ b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
 @@ -1,1 +1,1 @@
 -    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
-+    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_INPUT_FD").is_some()
 diff --git a/codex-rs/tui/src/chatwidget/permission_popups.rs b/codex-rs/tui/src/chatwidget/permission_popups.rs
 --- a/codex-rs/tui/src/chatwidget/permission_popups.rs
 +++ b/codex-rs/tui/src/chatwidget/permission_popups.rs
 @@ -1,1 +1,1 @@
 -    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()
-+    std::env::var_os("DSHX_APP_SERVER_FD").is_some()
++    std::env::var_os("DSHX_APP_SERVER_INPUT_FD").is_some()

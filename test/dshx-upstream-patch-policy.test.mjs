@@ -28,11 +28,14 @@ test('Codex-only runtime owners stay hidden from DSHX', () => {
   }
 });
 
-test('final DSHX mode detection follows the inherited profile fd, never a backend command or socket endpoint', () => {
+test('final DSHX mode detection follows the inherited profile pipes, never a backend command or socket endpoint', () => {
   assert.equal(inheritedPipePatch.split('-    std::env::var_os("DSHX_APP_SERVER_CMD").is_some()').length - 1, 3);
-  assert.equal(inheritedPipePatch.split('+    std::env::var_os("DSHX_APP_SERVER_FD").is_some()').length - 1, 3);
-  assert.match(inheritedPipePatch, /DSHX_APP_SERVER_FD is required/);
+  assert.equal(inheritedPipePatch.split('+    std::env::var_os("DSHX_APP_SERVER_INPUT_FD").is_some()').length - 1, 3);
+  for (const name of ['DSHX_APP_SERVER_INPUT_FD', 'DSHX_TERMINAL_INPUT_FD', 'DSHX_APP_SERVER_OUTPUT_FD']) {
+    assert.match(inheritedPipePatch, new RegExp(name));
+  }
   assert.doesNotMatch(inheritedPipePatch, /\+.*DSHX_APP_SERVER_ENDPOINT/);
+  assert.doesNotMatch(inheritedPipePatch, /\+.*DSHX_APP_SERVER_FD(?!_)/);
 });
 
 test('DSH thread ownership is independent from Codex remote-workspace classification', () => {
@@ -43,9 +46,13 @@ test('DSH thread ownership is independent from Codex remote-workspace classifica
   assert.equal(stdioModePatch.split('+    if crate::dshx_backend() {').length - 1, 3);
 });
 
-test('the final transport patch removes TUI-owned backend spawning', () => {
-  assert.match(inheritedPipePatch, /RemoteAppServerEndpoint::InheritedPipe/);
+test('the final transport patch removes TUI-owned backend spawning and restores terminal stdin', () => {
+  assert.match(inheritedPipePatch, /RemoteAppServerEndpoint::InheritedPipes/);
   assert.match(inheritedPipePatch, /inherited_protocol_file/);
+  assert.match(inheritedPipePatch, /dshx_prepare_stdio/);
+  assert.match(inheritedPipePatch, /O_NONBLOCK/);
+  assert.match(inheritedPipePatch, /SetStdHandle/);
   assert.match(inheritedPipePatch, /-        let mut command = Command::new\(executable\);/);
   assert.doesNotMatch(inheritedPipePatch, /\+.*Command::new\(executable\)/);
+  assert.doesNotMatch(inheritedPipePatch, /^\+libc = \{ workspace = true \}$/m, 'app-server-client must not add a lockfile-changing libc dependency');
 });

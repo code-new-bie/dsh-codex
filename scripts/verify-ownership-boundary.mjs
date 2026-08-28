@@ -31,8 +31,7 @@ if (!manifest.exports?.['./presentation'] || !manifest.exports?.['./startup']) {
 
 // Every DSH package belongs to the user's official installation. DSHX may
 // depend on non-DSH leaf helpers, but it must never install a second Harness
-// package into the profile. Service definitions are optional advisory host
-// peers and resolve through DSH's installation-owned profile fallback.
+// package into the profile.
 const runtimePeers = Object.keys(manifest.peerDependencies ?? {}).filter(
   (name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')
 );
@@ -61,9 +60,10 @@ requireText('bin/dshx.mjs', "'--profile', profile, ...argv");
 requireText('bin/dshx.mjs', "stdio: 'inherit'");
 requireText('bin/dshx.mjs', 'shell: false');
 forbidText('bin/dshx.mjs', /(?:from\s+|import\s+\(\s*|require\()\s*["']@deepseek-ai\//, 'importing Harness runtime builds');
-for (const retired of ['DSHX_APP_SERVER_CMD', '--dshx-app-server', 'DSHX_APP_SERVER_ENDPOINT', 'DSHX_IPC_BRIDGE_BIN']) {
-  forbidText('bin/dshx.mjs', retired, `retired nested-backend launch seam ${retired}`);
-}
+for (const retired of [
+  'DSHX_APP_SERVER_CMD', '--dshx-app-server', 'DSHX_APP_SERVER_ENDPOINT', 'DSHX_IPC_BRIDGE_BIN',
+  'DSHX_APP_SERVER_FD', 'DSHX_APP_SERVER_INPUT_FD', 'DSHX_APP_SERVER_OUTPUT_FD', 'DSHX_TERMINAL_INPUT_FD'
+]) forbidText('bin/dshx.mjs', retired, `launcher owning transport/runtime seam ${retired}`);
 
 // Surface rows follow the official startup-provider -> presentation-runner pattern.
 requireText('src/dsh/startup-plugin.mjs', "inject = ['cmdlineArgs']");
@@ -74,9 +74,9 @@ forbidText('src/dsh/startup-plugin.mjs', '--dshx-app-server', 'private backend s
 requireText('src/dsh/presentation-plugin.mjs', "inject = ['dshxStartup']");
 requireText('src/dsh/presentation-plugin.mjs', 'internals.spawnTui');
 requireText('src/dsh/presentation-plugin.mjs', "stdio: ['pipe', 'inherit', 'inherit', 0, 'pipe']");
-requireText('src/dsh/presentation-plugin.mjs', 'DSHX_APP_SERVER_INPUT_FD');
-requireText('src/dsh/presentation-plugin.mjs', 'DSHX_TERMINAL_INPUT_FD');
-requireText('src/dsh/presentation-plugin.mjs', 'DSHX_APP_SERVER_OUTPUT_FD');
+for (const name of ['DSHX_APP_SERVER_INPUT_FD', 'DSHX_TERMINAL_INPUT_FD', 'DSHX_APP_SERVER_OUTPUT_FD']) {
+  requireText('src/dsh/presentation-plugin.mjs', name);
+}
 requireText('src/dsh/presentation-plugin.mjs', 'startDshxStdioTransport');
 requireText('src/dsh/presentation-plugin.mjs', 'ctx.provide(SERVICE_KEY');
 requireText('src/dsh/presentation-plugin.mjs', 'requestHostExit(ctx');
@@ -86,14 +86,15 @@ forbidText('src/dsh/presentation-plugin.mjs', 'resolveDshInvocation', 'presentat
 requireText('src/dsh/stdio-transport.mjs', 'already-mounted DSH Context');
 forbidText('src/dsh/stdio-transport.mjs', /WebSocket|unix:\/\//, 'network/socket framing');
 
-// Rust is still in the inherited-pipe migration layer until the Core profile
-// lifecycle proves the final directional Node pipe topology. The next thin-fork
-// patch must remove backend spawning; no bridge/socket path may return.
+// The final thin fork consumes only profile-owned directional inherited pipes.
 const inheritedPatch = 'upstream/patches/codex/0012-dshx-inherited-profile-pipe.patch';
-requireText(inheritedPatch, 'InheritedPipe');
-requireText(inheritedPatch, 'DSHX_APP_SERVER_FD');
-requireText(inheritedPatch, '-use tokio::process::Command;');
+for (const needle of [
+  'InheritedPipes', 'DSHX_APP_SERVER_INPUT_FD', 'DSHX_TERMINAL_INPUT_FD',
+  'DSHX_APP_SERVER_OUTPUT_FD', 'dshx_prepare_stdio', 'O_NONBLOCK', 'SetStdHandle'
+]) requireText(inheritedPatch, needle);
 requireText(inheritedPatch, '-        let mut command = Command::new(executable);');
+forbidText(inheritedPatch, /^\+libc = \{ workspace = true \}$/m, 'lockfile-changing app-server-client libc dependency');
+forbidText(inheritedPatch, /^\+.*DSHX_APP_SERVER_FD(?!_)/m, 'retired single-fd transport');
 for (const file of readdirSync('upstream/patches/codex')) {
   if (!file.endsWith('.patch')) continue;
   forbidText(`upstream/patches/codex/${file}`, 'dshx-ipc-bridge', 'legacy Rust bridge');
@@ -101,8 +102,7 @@ for (const file of readdirSync('upstream/patches/codex')) {
 forbidText('scripts/build-codex-tui.sh', 'dshx-ipc-bridge');
 forbidText('scripts/build-codex-tui.ps1', 'dshx-ipc-bridge');
 
-// Domain capabilities delegate to DSH public services rather than local OS or
-// shadow runtime state.
+// Domain capabilities delegate to DSH public services rather than local OS or shadow runtime state.
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');
   requireText(path, 'tools.execute');
