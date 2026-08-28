@@ -1,0 +1,38 @@
+name: Lock Hash EOL Check
+
+on:
+  push:
+    branches: ['automation/lock-hash-eol-3729f2a6']
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    name: Hash / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+          - os: windows-latest
+            label: windows
+          - os: macos-26
+            label: macos
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 3729f2a6e5dc6422a21875e86c64ebac3fb95297
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Verify frozen lock byte identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(node -e "const fs=require('node:fs'),c=require('node:crypto');process.stdout.write(c.createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex'))")"
+          expected='2e8e32560688e57fc53e322e96e88adb8daecf6a396dac8caa4b5dc18e6aec37'
+          echo "lock sha256=$actual"
+          test "$actual" = "$expected"
