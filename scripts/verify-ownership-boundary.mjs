@@ -11,6 +11,8 @@ function forbidText(path, pattern, label = String(pattern)) {
 }
 
 // Standard DSH bundle ownership: this layer inserts only its own surface rows.
+requireText('cordis.patch.yml', 'id: hmr');
+requireText('cordis.patch.yml', 'disabled: true');
 requireText('cordis.patch.yml', 'id: dshx-startup');
 requireText('cordis.patch.yml', 'id: dshx-presentation');
 requireText('cordis.patch.yml', "name: '@code-new-bie/dshx-tui/startup'");
@@ -71,8 +73,10 @@ forbidText('src/dsh/startup-plugin.mjs', '--dshx-app-server', 'private backend s
 
 requireText('src/dsh/presentation-plugin.mjs', "inject = ['dshxStartup']");
 requireText('src/dsh/presentation-plugin.mjs', 'internals.spawnTui');
-requireText('src/dsh/presentation-plugin.mjs', "stdio: ['inherit', 'inherit', 'inherit', 'pipe']");
-requireText('src/dsh/presentation-plugin.mjs', 'DSHX_APP_SERVER_FD');
+requireText('src/dsh/presentation-plugin.mjs', "stdio: ['pipe', 'inherit', 'inherit', 0, 'pipe']");
+requireText('src/dsh/presentation-plugin.mjs', 'DSHX_APP_SERVER_INPUT_FD');
+requireText('src/dsh/presentation-plugin.mjs', 'DSHX_TERMINAL_INPUT_FD');
+requireText('src/dsh/presentation-plugin.mjs', 'DSHX_APP_SERVER_OUTPUT_FD');
 requireText('src/dsh/presentation-plugin.mjs', 'startDshxStdioTransport');
 requireText('src/dsh/presentation-plugin.mjs', 'ctx.provide(SERVICE_KEY');
 requireText('src/dsh/presentation-plugin.mjs', 'requestHostExit(ctx');
@@ -82,9 +86,9 @@ forbidText('src/dsh/presentation-plugin.mjs', 'resolveDshInvocation', 'presentat
 requireText('src/dsh/stdio-transport.mjs', 'already-mounted DSH Context');
 forbidText('src/dsh/stdio-transport.mjs', /WebSocket|unix:\/\//, 'network/socket framing');
 
-// The final thin-fork layer consumes only the inherited profile pipe. Earlier
-// migration patches may mention StdioChild/DSHX_APP_SERVER_CMD as removed text;
-// 0012 must replace that intermediate topology in the materialized result.
+// Rust is still in the inherited-pipe migration layer until the Core profile
+// lifecycle proves the final directional Node pipe topology. The next thin-fork
+// patch must remove backend spawning; no bridge/socket path may return.
 const inheritedPatch = 'upstream/patches/codex/0012-dshx-inherited-profile-pipe.patch';
 requireText(inheritedPatch, 'InheritedPipe');
 requireText(inheritedPatch, 'DSHX_APP_SERVER_FD');

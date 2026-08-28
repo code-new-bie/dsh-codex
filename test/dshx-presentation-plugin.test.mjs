@@ -34,7 +34,8 @@ function tick() { return new Promise((resolve) => setImmediate(resolve)); }
 
 function fakeChild() {
   const child = new EventEmitter();
-  child.stdio = [null, null, null, new PassThrough()];
+  child.stdin = new PassThrough();
+  child.stdio = [child.stdin, null, null, null, new PassThrough()];
   child.exitCode = null;
   child.signalCode = null;
   child.killed = false;
@@ -100,7 +101,7 @@ test('startup publishes the raw official profile arguments for the native TUI', 
   }
 });
 
-test('presentation waits for Loader settlement, launches TUI with inherited fd3, and exits through appExit', async () => {
+test('presentation waits for Loader settlement, launches TUI with directional inherited pipes, and exits through appExit', async () => {
   const exits = [];
   const { ctx, provided, loaderAwaited } = fakeContext(LAUNCH, (code) => exits.push(code));
   const child = fakeChild();
@@ -126,16 +127,20 @@ test('presentation waits for Loader settlement, launches TUI with inherited fd3,
     assert.equal(loaderAwaited(), 1);
     assert.equal(spawned.length, 1);
     assert.deepEqual(spawned[0].args, LAUNCH.tuiArgs);
-    assert.deepEqual(spawned[0].options.stdio, ['inherit', 'inherit', 'inherit', 'pipe']);
-    assert.equal(spawned[0].options.env.DSHX_APP_SERVER_FD, String(constants.PROTOCOL_FD));
+    assert.deepEqual(spawned[0].options.stdio, ['pipe', 'inherit', 'inherit', 0, 'pipe']);
+    assert.equal(spawned[0].options.env.DSHX_APP_SERVER_INPUT_FD, String(constants.PROTOCOL_INPUT_FD));
+    assert.equal(spawned[0].options.env.DSHX_TERMINAL_INPUT_FD, String(constants.TERMINAL_INPUT_FD));
+    assert.equal(spawned[0].options.env.DSHX_APP_SERVER_OUTPUT_FD, String(constants.PROTOCOL_OUTPUT_FD));
     assert.equal(transports.length, 1);
     assert.equal(transports[0].ctx, ctx);
-    assert.equal(transports[0].input, child.stdio[3]);
-    assert.equal(transports[0].output, child.stdio[3]);
+    assert.equal(transports[0].input, child.stdio[4]);
+    assert.equal(transports[0].output, child.stdin);
 
     const service = provided.get(SERVICE_KEY);
-    assert.equal(service.mode, 'inherited-pipe');
-    assert.equal(service.fd, 3);
+    assert.equal(service.mode, 'inherited-pipes');
+    assert.equal(service.inputFd, 0);
+    assert.equal(service.terminalInputFd, 3);
+    assert.equal(service.outputFd, 4);
     child.exitCode = 0;
     child.emit('exit', 0, null);
     await tick();

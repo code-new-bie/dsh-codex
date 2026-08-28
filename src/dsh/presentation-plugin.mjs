@@ -10,13 +10,19 @@ import { startDshxStdioTransport } from './stdio-transport.mjs';
  * dshx-presentation — native TUI runner over the live DSH composition.
  *
  * The official `dsh --profile tui` process is the parent/runtime owner. This
- * row launches only the pinned presentation binary. Terminal fds 0/1/2 are
- * inherited by the TUI; fd 3 is a private duplex NDJSON pipe bound directly to
- * the already-mounted DSH Context.
+ * row launches only the pinned presentation binary. Terminal output stays on
+ * fds 1/2. Node only guarantees child fd 0 as parent->child for a spawned
+ * stdio pipe, so protocol input temporarily occupies child fd 0; the parent's
+ * terminal stdin is also inherited as fd 3 and the Rust entrypoint restores it
+ * to fd 0 before Codex initializes the terminal. Child fd 4 carries protocol
+ * output back to this row. No listener, socket address, bridge, or second DSH
+ * runtime exists in this topology.
  */
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const PROTOCOL_FD = 3;
+const PROTOCOL_INPUT_FD = 0;
+const TERMINAL_INPUT_FD = 3;
+const PROTOCOL_OUTPUT_FD = 4;
 
 export const name = 'dshx-presentation';
 export const inject = ['dshxStartup'];
@@ -108,21 +114,29 @@ export function apply(ctx) {
       env: {
         ...process.env,
         CODEX_HOME: launch.home,
-        DSHX_APP_SERVER_FD: String(PROTOCOL_FD)
+        DSHX_APP_SERVER_INPUT_FD: String(PROTOCOL_INPUT_FD),
+        DSHX_TERMINAL_INPUT_FD: String(TERMINAL_INPUT_FD),
+        DSHX_APP_SERVER_OUTPUT_FD: String(PROTOCOL_OUTPUT_FD)
       },
-      // fd 3 is an anonymous duplex pipe. Keep it synchronous on Windows too:
-      // the Rust client wraps the inherited handle in tokio::fs::File, whose
-      // blocking adapter works uniformly without FILE_FLAG_OVERLAPPED.
-      stdio: ['inherit', 'inherit', 'inherit', 'pipe'],
+      // Node's spawn contract makes fd 0 child-readable and fd > 0
+      // child-writable for stdio:'pipe'. Keep the terminal's original stdin as
+      // child fd 3; the Rust entrypoint duplicates protocol fd 0, restores fd 3
+      // onto stdin, then uses fd 4 for protocol output.
+      stdio: ['pipe', 'inherit', 'inherit', 0, 'pipe'],
       windowsHide: false
     });
     state.child = child;
-    log(`native TUI child spawned with protocol fd ${PROTOCOL_FD}`);
+    log(`native TUI child spawned with protocol input fd ${PROTOCOL_INPUT_FD}, terminal input fd ${TERMINAL_INPUT_FD}, protocol output fd ${PROTOCOL_OUTPUT_FD}`);
 
-    const protocol = child.stdio?.[PROTOCOL_FD];
-    if (!protocol || typeof protocol.on !== 'function' || typeof protocol.write !== 'function') {
+    const protocolInput = child.stdin;
+    const protocolOutput = child.stdio?.[PROTOCOL_OUTPUT_FD];
+    if (!protocolInput || typeof protocolInput.write !== 'function') {
       try { child.kill('SIGTERM'); } catch {}
-      throw new Error(`native TUI did not expose inherited protocol fd ${PROTOCOL_FD}`);
+      throw new Error('native TUI did not expose parent-writable protocol input');
+    }
+    if (!protocolOutput || typeof protocolOutput.on !== 'function') {
+      try { child.kill('SIGTERM'); } catch {}
+      throw new Error(`native TUI did not expose protocol output fd ${PROTOCOL_OUTPUT_FD}`);
     }
 
     state.transport = internals.startTransport({
@@ -130,17 +144,17 @@ export function apply(ctx) {
       cwd: launch.cwd,
       home: launch.home,
       version: launch.version,
-      input: protocol,
-      output: protocol,
+      input: protocolOutput,
+      output: protocolInput,
       diagnostics: log,
       onEof: (error) => {
         if (error && !state.closing) {
-          log(`protocol pipe closed with error: ${error instanceof Error ? error.message : String(error)}`);
+          log(`protocol output pipe closed with error: ${error instanceof Error ? error.message : String(error)}`);
           try { child.kill('SIGTERM'); } catch {}
         }
       }
     });
-    log('fd3 presentation transport bound to live DSH Context');
+    log('directional presentation pipes bound to live DSH Context');
 
     child.once('error', (error) => {
       void finish(1, `native TUI spawn failed: ${error.message}`);
@@ -151,7 +165,13 @@ export function apply(ctx) {
     });
   };
 
-  ctx.provide(SERVICE_KEY, Object.freeze({ mode: 'inherited-pipe', fd: PROTOCOL_FD, close }));
+  ctx.provide(SERVICE_KEY, Object.freeze({
+    mode: 'inherited-pipes',
+    inputFd: PROTOCOL_INPUT_FD,
+    terminalInputFd: TERMINAL_INPUT_FD,
+    outputFd: PROTOCOL_OUTPUT_FD,
+    close
+  }));
   void launchTui().catch((error) => {
     void finish(1, `failed to launch native TUI: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   });
@@ -159,4 +179,4 @@ export function apply(ctx) {
 }
 
 export const plugin = { name, inject, Config, apply };
-export const constants = { PACKAGE_ROOT, PROTOCOL_FD };
+export const constants = { PACKAGE_ROOT, PROTOCOL_INPUT_FD, TERMINAL_INPUT_FD, PROTOCOL_OUTPUT_FD };

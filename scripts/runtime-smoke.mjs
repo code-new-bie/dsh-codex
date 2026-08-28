@@ -8,7 +8,7 @@ import { ensureProfileInstalled, resolveDshInvocation } from '../src/dsh/profile
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-const CLIENT = path.join(ROOT, 'scripts', 'fd3-smoke-client.mjs');
+const CLIENT = path.join(ROOT, 'scripts', 'profile-pipe-smoke-client.mjs');
 const BOOT_TIMEOUT_MS = Number(process.env.DSHX_SMOKE_BOOT_TIMEOUT_MS ?? 90_000);
 
 const ensured = ensureProfileInstalled({
@@ -54,12 +54,12 @@ await new Promise((resolve, reject) => {
       finish(new Error(`official DSH TUI profile failed (code ${code ?? '?'} signal ${signal ?? '-'})${stderr ? `:\n${stderr}` : ''}`));
       return;
     }
-    const marker = stdout.split(/\r?\n/).find((line) => line.startsWith('DSHX_FD3_SMOKE '));
+    const marker = stdout.split(/\r?\n/).find((line) => line.startsWith('DSHX_PROFILE_PIPE_SMOKE '));
     if (!marker) {
-      finish(new Error(`native presentation child never completed fd3 initialize${stderr ? `:\n${stderr}` : ''}`));
+      finish(new Error(`native presentation child never completed directional-pipe initialize${stderr ? `:\n${stderr}` : ''}`));
       return;
     }
-    const payload = JSON.parse(marker.slice('DSHX_FD3_SMOKE '.length));
+    const payload = JSON.parse(marker.slice('DSHX_PROFILE_PIPE_SMOKE '.length));
     if (!String(payload.userAgent ?? '').startsWith('dshx/')) {
       finish(new Error(`unexpected initialize identity: ${JSON.stringify(payload)}`));
       return;
