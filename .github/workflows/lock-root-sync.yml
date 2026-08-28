@@ -61,9 +61,13 @@ jobs:
           assert.equal(lock.version, pkg.version);
           assert.equal(root.name, pkg.name);
           assert.equal(root.version, pkg.version);
-          for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'peerDependenciesMeta', 'engines', 'bin']) {
+          for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'peerDependenciesMeta', 'engines']) {
             assert.deepStrictEqual(root[field] ?? {}, pkg[field] ?? {}, `lock root ${field} drift`);
           }
+          const normalizeBin = (bin = {}) => Object.fromEntries(
+            Object.entries(bin).map(([name, target]) => [name, String(target).replace(/^\.\//, '')])
+          );
+          assert.deepStrictEqual(normalizeBin(root.bin), normalizeBin(pkg.bin), 'lock root bin drift');
           assert.equal(root.dependencies?.['@deepseek-ai/dsh-cmdline'], undefined);
           assert.equal(root.devDependencies?.ws, undefined);
           NODE
