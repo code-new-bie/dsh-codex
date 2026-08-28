@@ -30,6 +30,14 @@ export function bootstrapSurfaceProfile() {
 }
 
 export function run(argv = process.argv.slice(2)) {
+  // `--version` is a DSH launcher-owned flag when it appears after `--profile`,
+  // so the UX alias must answer this one metadata query before delegating. All
+  // real app arguments remain owned by the mounted TUI profile.
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')) {
+    process.stdout.write(`${PACKAGE.version}\n`);
+    return 0;
+  }
+
   if (!isSupportedNodeVersion(process.versions.node)) {
     process.stderr.write(`dshx: unsupported Node ${process.version}; required ${PACKAGE.engines.node}\n`);
     return 1;

@@ -10,7 +10,6 @@ function forbidText(path, pattern, label = String(pattern)) {
   if (hit) throw new Error(`${path} violates ownership invariant: ${label}`);
 }
 
-// Standard DSH bundle ownership: this layer inserts only its own surface rows.
 requireText('cordis.patch.yml', 'id: hmr');
 requireText('cordis.patch.yml', 'disabled: true');
 requireText('cordis.patch.yml', 'id: dshx-startup');
@@ -28,11 +27,10 @@ if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml') {
 if (!manifest.exports?.['./presentation'] || !manifest.exports?.['./startup']) {
   throw new Error('package exports must expose the two Cordis surface rows');
 }
-if (manifest.dependencies?.ws) throw new Error('ws must never be a production dependency');
+if (manifest.dependencies?.ws || manifest.devDependencies?.ws) {
+  throw new Error('ws must not be a direct DSHX dependency; production transport is directional stdio');
+}
 
-// Every DSH package belongs to the user's official installation. DSHX may
-// depend on non-DSH leaf helpers, but it must never install a second Harness
-// package into the profile.
 const runtimePeers = Object.keys(manifest.peerDependencies ?? {}).filter(
   (name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')
 );
@@ -51,28 +49,30 @@ for (const name of runtimePeers) {
   }
 }
 
-// There is exactly one runtime owner: the user's official dsh launcher/profile.
 for (const retired of [
   'src/dsh/runtime-boot.mjs',
   'src/dsh/local-server.mjs',
   'bin/dshx-stub-local.mjs',
   'devtools/dshx-stub-server.mjs',
-  'devtools/stub-server.mjs'
+  'devtools/stub-server.mjs',
+  'src/cli/arguments.mjs'
 ]) {
-  if (existsSync(retired)) throw new Error(`${retired} must stay deleted; DSHX cannot own a runtime/socket host`);
+  if (existsSync(retired)) throw new Error(`${retired} must stay deleted; DSHX cannot own a runtime/socket/control plane`);
 }
 requireText('src/dsh/profile-bootstrap.mjs', "'plugin', '--profile'");
 requireText('src/dsh/profile-bootstrap.mjs', 'resolveDshInvocation');
 requireText('bin/dshx.mjs', "'--profile', profile, ...argv");
 requireText('bin/dshx.mjs', "stdio: 'inherit'");
 requireText('bin/dshx.mjs', 'shell: false');
+requireText('bin/dshx.mjs', "argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')");
+requireText('bin/dshx.mjs', 'process.stdout.write(`${PACKAGE.version}\\n`)');
+forbidText('bin/dshx.mjs', 'doctor', 'bespoke launcher doctor control plane');
 forbidText('bin/dshx.mjs', /(?:from\s+|import\s+\(\s*|require\()\s*["']@deepseek-ai\//, 'importing Harness runtime builds');
 for (const retired of [
   'DSHX_APP_SERVER_CMD', '--dshx-app-server', 'DSHX_APP_SERVER_ENDPOINT', 'DSHX_IPC_BRIDGE_BIN',
   'DSHX_APP_SERVER_FD', 'DSHX_APP_SERVER_INPUT_FD', 'DSHX_APP_SERVER_OUTPUT_FD', 'DSHX_TERMINAL_INPUT_FD'
 ]) forbidText('bin/dshx.mjs', retired, `launcher owning transport/runtime seam ${retired}`);
 
-// Surface rows follow the official startup-provider -> presentation-runner pattern.
 requireText('src/dsh/startup-plugin.mjs', "inject = ['cmdlineArgs']");
 requireText('src/dsh/startup-plugin.mjs', "provide('dshxStartup'");
 requireText('src/dsh/startup-plugin.mjs', 'tuiArgs:');
@@ -93,7 +93,6 @@ forbidText('src/dsh/presentation-plugin.mjs', 'resolveDshInvocation', 'presentat
 requireText('src/dsh/stdio-transport.mjs', 'already-mounted DSH Context');
 forbidText('src/dsh/stdio-transport.mjs', /WebSocket|unix:\/\//, 'network/socket framing');
 
-// The final thin fork consumes only profile-owned directional inherited pipes.
 const inheritedPatch = 'upstream/patches/codex/0012-dshx-inherited-profile-pipe.patch';
 for (const needle of [
   'InheritedPipes', 'DSHX_APP_SERVER_INPUT_FD', 'DSHX_TERMINAL_INPUT_FD',
@@ -109,7 +108,6 @@ for (const file of readdirSync('upstream/patches/codex')) {
 forbidText('scripts/build-codex-tui.sh', 'dshx-ipc-bridge');
 forbidText('scripts/build-codex-tui.ps1', 'dshx-ipc-bridge');
 
-// Domain capabilities delegate to DSH public services rather than local OS or shadow runtime state.
 for (const path of ['src/dsh/user-shell.mjs', 'src/dsh/workspace-command.mjs']) {
   forbidText(path, /execFile|execSync|spawn\(/, 'local process execution');
   requireText(path, 'tools.execute');
@@ -127,7 +125,6 @@ forbidText('src/tui-protocol/adapter.mjs', /seedLength|dshForkSeed/, 'shadow for
 requireText('src/tui-protocol/adapter.mjs', 'subagents.interrupt');
 forbidText('src/dsh/agent-driver.mjs', 'fork(sourceAgent');
 
-// Codex is only a presentation dialect.
 for (const required of ['src/tui-protocol/shapes.mjs', 'src/tui-protocol/adapter.mjs']) {
   if (!existsSync(required)) throw new Error(`missing protocol projection module: ${required}`);
 }

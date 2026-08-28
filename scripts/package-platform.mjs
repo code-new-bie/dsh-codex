@@ -27,8 +27,12 @@ if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
 }
 
+// A reviewed lock can retain unreachable historical root records until the next
+// trusted freeze. Every dependency that the current manifest can install must
+// still have the exact frozen spec; extras are deliberately ignored here and
+// are removed from the staged publishable root below.
 assertDependencySubset('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
-assertDependencyMap('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
+assertDependencySubset('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
 
 const releaseRoot = path.join(root, '.release');
 const stage = path.join(releaseRoot, `dshx-${platform}-${arch}`);
@@ -190,14 +194,6 @@ function assertDependencySubset(label, actual = {}, expected = {}) {
     if (actual[name] !== spec) {
       throw new Error(`Frozen package-lock.json ${label}.${name} does not match package.json: expected ${spec}, got ${actual[name] ?? '<missing>'}`);
     }
-  }
-}
-
-function assertDependencyMap(label, actual = {}, expected = {}) {
-  const actualEntries = Object.entries(actual).sort(([a], [b]) => a.localeCompare(b));
-  const expectedEntries = Object.entries(expected).sort(([a], [b]) => a.localeCompare(b));
-  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
-    throw new Error(`Frozen package-lock.json ${label} does not match package.json`);
   }
 }
 
