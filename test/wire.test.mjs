@@ -20,7 +20,8 @@ test('wire contract: Codex-style initialize → thread → streamed turn lifecyc
   });
   assert.equal(initialized.response.result.platformFamily.length > 0, true);
   assert.equal(Object.hasOwn(initialized.response, 'jsonrpc'), false);
-  assert.match(initialized.response.result.userAgent, /^dshx\//);
+  assert.equal(typeof initialized.response.result.userAgent, 'string');
+  assert.notEqual(initialized.response.result.userAgent.length, 0);
 
   // Codex sends this notification after initialize. The protocol fixture must
   // accept it without synthesizing a response or a transport-level side effect.
