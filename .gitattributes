@@ -1,0 +1,3 @@
+# Release provenance hashes the reviewed lockfile bytes. Keep that identity
+# stable across Windows, macOS, and Linux checkouts.
+package-lock.json text eol=lf
