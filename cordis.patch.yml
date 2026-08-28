@@ -1,0 +1,21 @@
+# DSHX is a standard presentation bundle over the profile's official DSH base.
+# `dsh --profile tui` is the application entry point. The startup row receives
+# the launcher's immutable cmdlineArgs snapshot; the presentation runner waits
+# for the Loader tree to settle, launches the pinned native TUI, and binds its
+# anonymous directional protocol pipes directly to the live DSH Context. Child
+# fd 0 is protocol input, fd 3 preserves terminal stdin, and fd 4 is protocol
+# output.
+
+# Match the official headless CLI-surface pattern: the shared module HMR row is
+# not part of the interactive runner. The profile launcher's watch fallback
+# remains responsible for user patch layers during the process lifetime.
+- id: hmr
+  disabled: true
+
+- insert:
+    - id: dshx-startup
+      name: '@code-new-bie/dshx-tui/startup'
+
+    - id: dshx-presentation
+      name: '@code-new-bie/dshx-tui/presentation'
+      inject: [dshxStartup]

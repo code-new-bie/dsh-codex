@@ -53,6 +53,7 @@ const [installCommand, installArgs] = npmInvocation([
 ]);
 run(installCommand, installArgs);
 
+run(process.execPath, ['scripts/verify-lock-root.mjs']);
 run(process.execPath, [
   'scripts/verify-dsh-closure.mjs',
   '.',

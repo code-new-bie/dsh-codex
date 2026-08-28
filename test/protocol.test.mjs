@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { ProtocolStub, normalizeDispatchResult } from '../src/protocol.mjs';
+import { ProtocolStub, normalizeDispatchResult } from '../devtools/protocol-poc.mjs';
 
 function request(stub, id, method, params = {}) {
   return normalizeDispatchResult(stub, { id, method, params });

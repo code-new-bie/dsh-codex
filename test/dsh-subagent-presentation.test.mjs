@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dshThreadFromSnapshot } from '../src/dsh/codex-shapes.mjs';
-import { DshxReleaseAdapter } from '../src/dsh/release-adapter.mjs';
+import { dshThreadFromSnapshot } from '../src/tui-protocol/shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 function childAgent() {
   return {
@@ -66,7 +66,7 @@ test('release loaded-thread wire response lists official DSH live ids while rich
     }
   };
   const child = childAgent();
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.version = 'test';
   adapter.driver = {
     listLive() { return [root, child]; },

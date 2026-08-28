@@ -45,18 +45,20 @@ jobs:
         run: npm test
       - name: Verify DSH ownership boundary
         run: node scripts/verify-ownership-boundary.mjs
+      - name: Enable pnpm for the surface profile bootstrap
+        run: corepack enable pnpm
       - name: Boot and dispose official DeepSeek Harness composition
         run: node scripts/runtime-smoke.mjs
-      - name: Syntax check shipped JavaScript
+      - name: Syntax check shipped and development JavaScript
         shell: bash
         run: |
           set -euo pipefail
-          while IFS= read -r file; do node --check "$file"; done < <(find src bin scripts -type f -name '*.mjs' -print | sort)
+          while IFS= read -r file; do node --check "$file"; done < <(find src bin scripts devtools test -type f \( -name '*.mjs' -o -name '*.js' \) -print | sort)
       - name: Syntax check PTY smoke
         run: python3 -m py_compile test/tui_smoke.py
 
   linux-tui:
-    name: Linux TUI / pinned Codex / local IPC
+    name: Linux TUI / pinned Codex / DSH stdio
     needs: core
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -83,16 +85,17 @@ jobs:
         run: npm ci
       - name: Verify exact DeepSeek Harness release closure
         run: node scripts/verify-dsh-closure.mjs
-      - name: Build pinned Codex TUI + local IPC bridge
+      - name: Build pinned Codex TUI
         shell: bash
         env:
           DSHX_VERSION: 1.0.0-ci
         run: bash scripts/build-codex-tui.sh
-      - name: Verify thin-fork and transport invariants
+      - name: Verify thin-fork and stdio transport invariants
         run: node scripts/verify-tui-invariants.mjs
-      - name: Verify local IPC data plane
-        shell: bash
-        run: dist/bin/dshx-ipc-bridge --check
+      - name: Enable pnpm for the official plugin machinery
+        run: corepack enable pnpm
+      - name: Verify bundle install and stdio activation end to end
+        run: node scripts/verify-bundle-install.mjs
       - name: Exercise real TUI through Linux PTY + CJK + resize
         shell: bash
         run: |

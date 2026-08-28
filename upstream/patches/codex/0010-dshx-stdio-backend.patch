@@ -1,0 +1,732 @@
+diff --git a/codex-rs/app-server-client/Cargo.toml b/codex-rs/app-server-client/Cargo.toml
+--- a/codex-rs/app-server-client/Cargo.toml
++++ b/codex-rs/app-server-client/Cargo.toml
+@@ -30,7 +30,7 @@ serde = { workspace = true }
+ serde_json = { workspace = true }
+-tokio = { workspace = true, features = ["sync", "time", "rt"] }
++tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "process"] }
+ tokio-tungstenite = { workspace = true }
+ toml = { workspace = true }
+ tracing = { workspace = true }
+diff --git a/codex-rs/app-server-client/src/lib.rs b/codex-rs/app-server-client/src/lib.rs
+--- a/codex-rs/app-server-client/src/lib.rs
++++ b/codex-rs/app-server-client/src/lib.rs
+@@ -8,6 +8,7 @@
+ 
+ mod path;
+ mod remote;
++mod stdio;
+@@ -51,6 +52,9 @@ pub use crate::remote::RemoteAppServerClient;
+ pub use crate::remote::RemoteAppServerConnectArgs;
+ pub use crate::remote::RemoteAppServerEndpoint;
++pub use crate::stdio::StdioAppServerClient;
++pub use crate::stdio::StdioAppServerConnectArgs;
++pub use crate::stdio::StdioAppServerRequestHandle;
+@@ -237,10 +241,12 @@ pub enum AppServerRequestHandle {
+     InProcess(InProcessAppServerRequestHandle),
+     Remote(crate::remote::RemoteAppServerRequestHandle),
++    Stdio(StdioAppServerRequestHandle),
+ }
+ 
+ pub enum AppServerClient {
+     InProcess(InProcessAppServerClient),
+     Remote(RemoteAppServerClient),
++    Stdio(StdioAppServerClient),
+ }
+@@ -468,6 +474,7 @@ impl AppServerRequestHandle {
+         match self {
+             Self::InProcess(handle) => handle.request(request).await,
+             Self::Remote(handle) => handle.request(request).await,
++            Self::Stdio(handle) => handle.request(request).await,
+         }
+     }
+@@ -478,6 +485,7 @@ impl AppServerRequestHandle {
+         match self {
+             Self::InProcess(handle) => handle.request_typed(request).await,
+             Self::Remote(handle) => handle.request_typed(request).await,
++            Self::Stdio(handle) => handle.request_typed(request).await,
+         }
+     }
+ }
+@@ -490,6 +498,7 @@ impl AppServerClient {
+             )),
+             Self::Remote(client) => client.codex_home().map(AppServerPath::from_app_server),
++            Self::Stdio(client) => client.codex_home().map(AppServerPath::from_app_server),
+         }
+     }
+@@ -498,6 +507,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.request(request).await,
+             Self::Remote(client) => client.request(request).await,
++            Self::Stdio(client) => client.request(request).await,
+         }
+     }
+@@ -508,6 +518,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.request_typed(request).await,
+             Self::Remote(client) => client.request_typed(request).await,
++            Self::Stdio(client) => client.request_typed(request).await,
+         }
+     }
+@@ -516,6 +527,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.notify(notification).await,
+             Self::Remote(client) => client.notify(notification).await,
++            Self::Stdio(client) => client.notify(notification).await,
+         }
+     }
+@@ -528,6 +540,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.resolve_server_request(request_id, result).await,
+             Self::Remote(client) => client.resolve_server_request(request_id, result).await,
++            Self::Stdio(client) => client.resolve_server_request(request_id, result).await,
+         }
+     }
+@@ -540,6 +553,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.reject_server_request(request_id, error).await,
+             Self::Remote(client) => client.reject_server_request(request_id, error).await,
++            Self::Stdio(client) => client.reject_server_request(request_id, error).await,
+         }
+     }
+@@ -548,6 +562,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.next_event().await.map(Into::into),
+             Self::Remote(client) => client.next_event().await,
++            Self::Stdio(client) => client.next_event().await,
+         }
+     }
+@@ -556,6 +571,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => client.shutdown().await,
+             Self::Remote(client) => client.shutdown().await,
++            Self::Stdio(client) => client.shutdown().await,
+         }
+     }
+@@ -564,6 +580,7 @@ impl AppServerClient {
+         match self {
+             Self::InProcess(client) => AppServerRequestHandle::InProcess(client.request_handle()),
+             Self::Remote(client) => AppServerRequestHandle::Remote(client.request_handle()),
++            Self::Stdio(client) => AppServerRequestHandle::Stdio(client.request_handle()),
+         }
+     }
+ }
+diff --git a/codex-rs/app-server-client/src/remote.rs b/codex-rs/app-server-client/src/remote.rs
+--- a/codex-rs/app-server-client/src/remote.rs
++++ b/codex-rs/app-server-client/src/remote.rs
+@@ -68,6 +68,9 @@ pub enum RemoteAppServerEndpoint {
+     UnixSocket {
+         socket_path: AbsolutePathBuf,
+     },
++    StdioChild {
++        command: Vec<String>,
++    },
+ }
+@@ -143,6 +146,12 @@ impl RemoteAppServerClient {
+                 Self::connect_with_stream(channel_capacity, endpoint, stream, initialize_params)
+                     .await
+             }
++            RemoteAppServerEndpoint::StdioChild { .. } => Err(IoError::new(
++                ErrorKind::InvalidInput,
++                "stdio child endpoints must be opened with StdioAppServerClient",
++            )),
+         }
+     }
+diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-client/src/stdio.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/app-server-client/src/stdio.rs
+@@ -0,0 +1,459 @@
++//! Local child-process app-server transport using one JSON-RPC object per line.
++//!
++//! This is intentionally local-process only. It exists so presentation clients
++//! can reuse the normal app-server API while delegating runtime ownership to an
++//! external host process without introducing a socket or WebSocket server.
++
++use std::collections::HashMap;
++use std::collections::VecDeque;
++use std::io::Error as IoError;
++use std::io::ErrorKind;
++use std::io::Result as IoResult;
++use std::process::Stdio;
++
++use crate::AppServerEvent;
++use crate::RequestResult;
++use crate::SHUTDOWN_TIMEOUT;
++use crate::TypedRequestError;
++use codex_app_server_protocol::ClientInfo;
++use codex_app_server_protocol::ClientNotification;
++use codex_app_server_protocol::ClientRequest;
++use codex_app_server_protocol::InitializeCapabilities;
++use codex_app_server_protocol::InitializeParams;
++use codex_app_server_protocol::JSONRPCError;
++use codex_app_server_protocol::JSONRPCErrorError;
++use codex_app_server_protocol::JSONRPCMessage;
++use codex_app_server_protocol::JSONRPCNotification;
++use codex_app_server_protocol::JSONRPCRequest;
++use codex_app_server_protocol::JSONRPCResponse;
++use codex_app_server_protocol::RequestId;
++use codex_app_server_protocol::Result as JsonRpcResult;
++use codex_app_server_protocol::ServerNotification;
++use codex_app_server_protocol::ServerRequest;
++use serde::de::DeserializeOwned;
++use tokio::io::AsyncBufReadExt;
++use tokio::io::AsyncWriteExt;
++use tokio::io::BufReader;
++use tokio::process::ChildStdin;
++use tokio::process::Command;
++use tokio::sync::mpsc;
++use tokio::sync::oneshot;
++use tokio::time::timeout;
++use tracing::warn;
++
++const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
++
++#[derive(Debug, Clone)]
++pub struct StdioAppServerConnectArgs {
++    pub command: Vec<String>,
++    pub client_name: String,
++    pub client_version: String,
++    pub experimental_api: bool,
++    pub mcp_server_openai_form_elicitation: bool,
++    pub opt_out_notification_methods: Vec<String>,
++    pub channel_capacity: usize,
++}
++
++impl StdioAppServerConnectArgs {
++    fn initialize_params(&self) -> InitializeParams {
++        InitializeParams {
++            client_info: ClientInfo {
++                name: self.client_name.clone(),
++                title: None,
++                version: self.client_version.clone(),
++            },
++            capabilities: Some(InitializeCapabilities {
++                experimental_api: self.experimental_api,
++                request_attestation: false,
++                extensions: None,
++                opt_out_notification_methods: if self.opt_out_notification_methods.is_empty() {
++                    None
++                } else {
++                    Some(self.opt_out_notification_methods.clone())
++                },
++                mcp_server_openai_form_elicitation: self.mcp_server_openai_form_elicitation,
++            }),
++        }
++    }
++}
++
++enum StdioClientCommand {
++    Request {
++        request: Box<JSONRPCRequest>,
++        response_tx: oneshot::Sender<IoResult<RequestResult>>,
++    },
++    Notify {
++        notification: ClientNotification,
++        response_tx: oneshot::Sender<IoResult<()>>,
++    },
++    ResolveServerRequest {
++        request_id: RequestId,
++        result: JsonRpcResult,
++        response_tx: oneshot::Sender<IoResult<()>>,
++    },
++    RejectServerRequest {
++        request_id: RequestId,
++        error: JSONRPCErrorError,
++        response_tx: oneshot::Sender<IoResult<()>>,
++    },
++    Shutdown {
++        response_tx: oneshot::Sender<IoResult<()>>,
++    },
++}
++
++pub struct StdioAppServerClient {
++    command_tx: mpsc::Sender<StdioClientCommand>,
++    event_rx: mpsc::UnboundedReceiver<AppServerEvent>,
++    pending_events: VecDeque<AppServerEvent>,
++    server_version: Option<String>,
++    codex_home: Option<String>,
++    worker_handle: tokio::task::JoinHandle<()>,
++}
++
++#[derive(Clone)]
++pub struct StdioAppServerRequestHandle {
++    command_tx: mpsc::Sender<StdioClientCommand>,
++}
++
++impl StdioAppServerClient {
++    pub async fn connect(args: StdioAppServerConnectArgs) -> IoResult<Self> {
++        let executable = args.command.first().filter(|value| !value.is_empty()).ok_or_else(|| {
++            IoError::new(ErrorKind::InvalidInput, "stdio app-server command must not be empty")
++        })?;
++        let mut command = Command::new(executable);
++        command
++            .args(&args.command[1..])
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::inherit())
++            .kill_on_drop(true);
++        let mut child = command.spawn().map_err(|err| {
++            IoError::new(
++                err.kind(),
++                format!("failed to spawn stdio app server `{executable}`: {err}"),
++            )
++        })?;
++        let mut stdin = child.stdin.take().ok_or_else(|| {
++            IoError::new(ErrorKind::BrokenPipe, "stdio app-server stdin was not piped")
++        })?;
++        let stdout = child.stdout.take().ok_or_else(|| {
++            IoError::new(ErrorKind::BrokenPipe, "stdio app-server stdout was not piped")
++        })?;
++        let mut lines = BufReader::new(stdout).lines();
++        let endpoint = format!("stdio://{}", executable);
++        let initialize_params = args.initialize_params();
++        let (pending_events, server_version, codex_home) = initialize_stdio_connection(
++            &mut stdin,
++            &mut lines,
++            &endpoint,
++            initialize_params,
++        )
++        .await?;
++
++        let channel_capacity = args.channel_capacity.max(1);
++        let (command_tx, mut command_rx) = mpsc::channel::<StdioClientCommand>(channel_capacity);
++        let (event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
++        let worker_handle = tokio::spawn(async move {
++            let mut pending_requests =
++                HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
++            let mut worker_exit_error: Option<(ErrorKind, String)> = None;
++            let mut clean_shutdown = false;
++
++            loop {
++                tokio::select! {
++                    command = command_rx.recv() => {
++                        let Some(command) = command else {
++                            break;
++                        };
++                        match command {
++                            StdioClientCommand::Request { request, response_tx } => {
++                                let request_id = request.id.clone();
++                                if pending_requests.contains_key(&request_id) {
++                                    let _ = response_tx.send(Err(IoError::new(
++                                        ErrorKind::InvalidInput,
++                                        format!("duplicate stdio app-server request id `{request_id}`"),
++                                    )));
++                                    continue;
++                                }
++                                pending_requests.insert(request_id.clone(), response_tx);
++                                if let Err(err) = write_jsonrpc_line(
++                                    &mut stdin,
++                                    JSONRPCMessage::Request(*request),
++                                    &endpoint,
++                                ).await {
++                                    let message = err.to_string();
++                                    if let Some(response_tx) = pending_requests.remove(&request_id) {
++                                        let _ = response_tx.send(Err(err));
++                                    }
++                                    let _ = deliver_event(&event_tx, AppServerEvent::Disconnected {
++                                        message: message.clone(),
++                                    });
++                                    worker_exit_error = Some((ErrorKind::BrokenPipe, message));
++                                    break;
++                                }
++                            }
++                            StdioClientCommand::Notify { notification, response_tx } => {
++                                let result = write_jsonrpc_line(
++                                    &mut stdin,
++                                    JSONRPCMessage::Notification(
++                                        jsonrpc_notification_from_client_notification(notification),
++                                    ),
++                                    &endpoint,
++                                ).await;
++                                let _ = response_tx.send(result);
++                            }
++                            StdioClientCommand::ResolveServerRequest { request_id, result, response_tx } => {
++                                let result = write_jsonrpc_line(
++                                    &mut stdin,
++                                    JSONRPCMessage::Response(JSONRPCResponse { id: request_id, result }),
++                                    &endpoint,
++                                ).await;
++                                let _ = response_tx.send(result);
++                            }
++                            StdioClientCommand::RejectServerRequest { request_id, error, response_tx } => {
++                                let result = write_jsonrpc_line(
++                                    &mut stdin,
++                                    JSONRPCMessage::Error(JSONRPCError { id: request_id, error }),
++                                    &endpoint,
++                                ).await;
++                                let _ = response_tx.send(result);
++                            }
++                            StdioClientCommand::Shutdown { response_tx } => {
++                                let mut result = stdin.shutdown().await;
++                                if result.is_ok() {
++                                    result = match timeout(SHUTDOWN_TIMEOUT, child.wait()).await {
++                                        Ok(Ok(_status)) => Ok(()),
++                                        Ok(Err(err)) => Err(err),
++                                        Err(_) => {
++                                            let _ = child.kill().await;
++                                            Err(IoError::new(
++                                                ErrorKind::TimedOut,
++                                                format!("timed out shutting down stdio app server `{endpoint}`"),
++                                            ))
++                                        }
++                                    };
++                                }
++                                clean_shutdown = result.is_ok();
++                                let _ = response_tx.send(result);
++                                break;
++                            }
++                        }
++                    }
++                    line = lines.next_line() => {
++                        match line {
++                            Ok(Some(line)) if line.trim().is_empty() => continue,
++                            Ok(Some(line)) => {
++                                let message = match serde_json::from_str::<JSONRPCMessage>(&line) {
++                                    Ok(message) => message,
++                                    Err(err) => {
++                                        let detail = format!("stdio app server `{endpoint}` sent invalid JSON-RPC: {err}");
++                                        let _ = deliver_event(&event_tx, AppServerEvent::Disconnected { message: detail.clone() });
++                                        worker_exit_error = Some((ErrorKind::InvalidData, detail));
++                                        break;
++                                    }
++                                };
++                                match message {
++                                    JSONRPCMessage::Response(response) => {
++                                        if let Some(response_tx) = pending_requests.remove(&response.id) {
++                                            let _ = response_tx.send(Ok(Ok(response.result)));
++                                        }
++                                    }
++                                    JSONRPCMessage::Error(error) => {
++                                        if let Some(response_tx) = pending_requests.remove(&error.id) {
++                                            let _ = response_tx.send(Ok(Err(error.error)));
++                                        }
++                                    }
++                                    JSONRPCMessage::Notification(notification) => {
++                                        if let Some(event) = app_server_event_from_notification(notification)
++                                            && let Err(err) = deliver_event(&event_tx, event)
++                                        {
++                                            warn!(%err, "failed to deliver stdio app-server event");
++                                            break;
++                                        }
++                                    }
++                                    JSONRPCMessage::Request(request) => {
++                                        let request_id = request.id.clone();
++                                        let method = request.method.clone();
++                                        match ServerRequest::try_from(request) {
++                                            Ok(request) => {
++                                                if let Err(err) = deliver_event(
++                                                    &event_tx,
++                                                    AppServerEvent::ServerRequest(Box::new(request)),
++                                                ) {
++                                                    warn!(%err, "failed to deliver stdio app-server server request");
++                                                    break;
++                                                }
++                                            }
++                                            Err(err) => {
++                                                warn!(%err, method, "rejecting unknown stdio app-server request");
++                                                if let Err(write_err) = write_jsonrpc_line(
++                                                    &mut stdin,
++                                                    JSONRPCMessage::Error(JSONRPCError {
++                                                        id: request_id,
++                                                        error: JSONRPCErrorError {
++                                                            code: -32601,
++                                                            message: format!("unsupported stdio app-server request `{method}`"),
++                                                            data: None,
++                                                        },
++                                                    }),
++                                                    &endpoint,
++                                                ).await {
++                                                    worker_exit_error = Some((ErrorKind::BrokenPipe, write_err.to_string()));
++                                                    break;
++                                                }
++                                            }
++                                        }
++                                    }
++                                }
++                            }
++                            Ok(None) => {
++                                let detail = format!("stdio app server `{endpoint}` closed stdout");
++                                let _ = deliver_event(&event_tx, AppServerEvent::Disconnected { message: detail.clone() });
++                                worker_exit_error = Some((ErrorKind::UnexpectedEof, detail));
++                                break;
++                            }
++                            Err(err) => {
++                                let detail = format!("stdio app server `{endpoint}` read failed: {err}");
++                                let _ = deliver_event(&event_tx, AppServerEvent::Disconnected { message: detail.clone() });
++                                worker_exit_error = Some((err.kind(), detail));
++                                break;
++                            }
++                        }
++                    }
++                }
++            }
++
++            if !clean_shutdown {
++                let _ = stdin.shutdown().await;
++                if child.try_wait().ok().flatten().is_none() {
++                    let _ = child.kill().await;
++                }
++            }
++            let (kind, message) = worker_exit_error.unwrap_or_else(|| {
++                (ErrorKind::BrokenPipe, "stdio app-server worker channel is closed".to_string())
++            });
++            for (_, response_tx) in pending_requests {
++                let _ = response_tx.send(Err(IoError::new(kind, message.clone())));
++            }
++        });
++
++        Ok(Self {
++            command_tx,
++            event_rx,
++            pending_events: pending_events.into(),
++            server_version,
++            codex_home,
++            worker_handle,
++        })
++    }
++
++    pub fn server_version(&self) -> Option<&str> { self.server_version.as_deref() }
++    pub fn codex_home(&self) -> Option<&str> { self.codex_home.as_deref() }
++    pub fn request_handle(&self) -> StdioAppServerRequestHandle {
++        StdioAppServerRequestHandle { command_tx: self.command_tx.clone() }
++    }
++    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
++        self.request_handle().request(request).await
++    }
++    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
++    where T: DeserializeOwned {
++        self.request_handle().request_typed(request).await
++    }
++    pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
++        let (response_tx, response_rx) = oneshot::channel();
++        self.command_tx.send(StdioClientCommand::Notify { notification, response_tx }).await
++            .map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server worker is closed"))?;
++        response_rx.await.map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio notify response channel is closed"))?
++    }
++    pub async fn resolve_server_request(&self, request_id: RequestId, result: JsonRpcResult) -> IoResult<()> {
++        let (response_tx, response_rx) = oneshot::channel();
++        self.command_tx.send(StdioClientCommand::ResolveServerRequest { request_id, result, response_tx }).await
++            .map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server worker is closed"))?;
++        response_rx.await.map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio resolve response channel is closed"))?
++    }
++    pub async fn reject_server_request(&self, request_id: RequestId, error: JSONRPCErrorError) -> IoResult<()> {
++        let (response_tx, response_rx) = oneshot::channel();
++        self.command_tx.send(StdioClientCommand::RejectServerRequest { request_id, error, response_tx }).await
++            .map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server worker is closed"))?;
++        response_rx.await.map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio reject response channel is closed"))?
++    }
++    pub async fn next_event(&mut self) -> Option<AppServerEvent> {
++        if let Some(event) = self.pending_events.pop_front() { return Some(event); }
++        self.event_rx.recv().await
++    }
++    pub async fn shutdown(self) -> IoResult<()> {
++        let Self { command_tx, event_rx, pending_events: _, server_version: _, codex_home: _, worker_handle } = self;
++        let mut worker_handle = worker_handle;
++        drop(event_rx);
++        let (response_tx, response_rx) = oneshot::channel();
++        if command_tx.send(StdioClientCommand::Shutdown { response_tx }).await.is_ok()
++            && let Ok(Ok(result)) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
++        {
++            result?;
++        }
++        if timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await.is_err() {
++            worker_handle.abort();
++            let _ = worker_handle.await;
++        }
++        Ok(())
++    }
++}
++
++impl StdioAppServerRequestHandle {
++    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
++        let request = jsonrpc_request_from_client_request(request);
++        let (response_tx, response_rx) = oneshot::channel();
++        self.command_tx.send(StdioClientCommand::Request { request: Box::new(request), response_tx }).await
++            .map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server worker is closed"))?;
++        response_rx.await.map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio request response channel is closed"))?
++    }
++    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
++    where T: DeserializeOwned {
++        let method = request.method_name().to_string();
++        let response = self.request(request).await.map_err(|source| TypedRequestError::Transport {
++            method: method.clone(), source,
++        })?;
++        let result = response.map_err(|source| TypedRequestError::Server { method: method.clone(), source })?;
++        serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize { method, source })
++    }
++}
++
++async fn initialize_stdio_connection(
++    stdin: &mut ChildStdin,
++    lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
++    endpoint: &str,
++    params: InitializeParams,
++) -> IoResult<(Vec<AppServerEvent>, Option<String>, Option<String>)> {
++    let initialize_id = RequestId::String("initialize".to_string());
++    write_jsonrpc_line(
++        stdin,
++        JSONRPCMessage::Request(jsonrpc_request_from_client_request(ClientRequest::Initialize {
++            request_id: initialize_id.clone(),
++            params,
++        })),
++        endpoint,
++    ).await?;
++    let mut pending_events = Vec::new();
++    let mut server_version = None;
++    let mut codex_home = None;
++    timeout(INITIALIZE_TIMEOUT, async {
++        loop {
++            let Some(line) = lines.next_line().await? else {
++                return Err(IoError::new(ErrorKind::UnexpectedEof, format!("{endpoint} closed during initialize")));
++            };
++            if line.trim().is_empty() { continue; }
++            let message = serde_json::from_str::<JSONRPCMessage>(&line).map_err(|err| {
++                IoError::new(ErrorKind::InvalidData, format!("{endpoint} sent invalid initialize JSON-RPC: {err}"))
++            })?;
++            match message {
++                JSONRPCMessage::Response(response) if response.id == initialize_id => {
++                    server_version = response.result.get("userAgent")
++                        .and_then(serde_json::Value::as_str)
++                        .and_then(|value| value.split_once('/').map(|(_, rest)| rest))
++                        .and_then(|rest| rest.split_whitespace().next())
++                        .map(str::to_string);
++                    codex_home = response.result.get("codexHome")
++                        .and_then(serde_json::Value::as_str)
++                        .filter(|value| !value.is_empty())
++                        .map(str::to_string);
++                    break Ok(());
++                }
++                JSONRPCMessage::Error(error) if error.id == initialize_id => {
++                    break Err(IoError::other(format!("{endpoint} rejected initialize: {}", error.error.message)));
++                }
++                JSONRPCMessage::Notification(notification) => {
++                    if let Some(event) = app_server_event_from_notification(notification) { pending_events.push(event); }
++                }
++                JSONRPCMessage::Request(request) => {
++                    let request_id = request.id.clone();
++                    let method = request.method.clone();
++                    match ServerRequest::try_from(request) {
++                        Ok(request) => pending_events.push(AppServerEvent::ServerRequest(Box::new(request))),
++                        Err(_) => write_jsonrpc_line(
++                            stdin,
++                            JSONRPCMessage::Error(JSONRPCError {
++                                id: request_id,
++                                error: JSONRPCErrorError {
++                                    code: -32601,
++                                    message: format!("unsupported stdio app-server request `{method}`"),
++                                    data: None,
++                                },
++                            }),
++                            endpoint,
++                        ).await?,
++                    }
++                }
++                JSONRPCMessage::Response(_) | JSONRPCMessage::Error(_) => {}
++            }
++        }
++    }).await.map_err(|_| IoError::new(ErrorKind::TimedOut, format!("timed out waiting for initialize response from `{endpoint}`")))??;
++    write_jsonrpc_line(
++        stdin,
++        JSONRPCMessage::Notification(jsonrpc_notification_from_client_notification(ClientNotification::Initialized)),
++        endpoint,
++    ).await?;
++    Ok((pending_events, server_version, codex_home))
++}
++
++async fn write_jsonrpc_line(stdin: &mut ChildStdin, message: JSONRPCMessage, endpoint: &str) -> IoResult<()> {
++    let payload = serde_json::to_string(&message).map_err(IoError::other)?;
++    stdin.write_all(payload.as_bytes()).await.map_err(|err| IoError::new(err.kind(), format!("failed to write to `{endpoint}`: {err}")))?;
++    stdin.write_all(b"\n").await?;
++    stdin.flush().await?;
++    Ok(())
++}
++
++fn app_server_event_from_notification(notification: JSONRPCNotification) -> Option<AppServerEvent> {
++    ServerNotification::try_from(notification).ok().map(|notification| {
++        AppServerEvent::ServerNotification(Box::new(notification))
++    })
++}
++
++fn deliver_event(event_tx: &mpsc::UnboundedSender<AppServerEvent>, event: AppServerEvent) -> IoResult<()> {
++    event_tx.send(event).map_err(|_| IoError::new(ErrorKind::BrokenPipe, "stdio app-server event consumer is closed"))
++}
++
++fn jsonrpc_request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
++    let value = serde_json::to_value(request).expect("client request should serialize");
++    serde_json::from_value(value).expect("client request should encode as JSON-RPC request")
++}
++
++fn jsonrpc_notification_from_client_notification(notification: ClientNotification) -> JSONRPCNotification {
++    let value = serde_json::to_value(notification).expect("client notification should serialize");
++    serde_json::from_value(value).expect("client notification should encode as JSON-RPC notification")
++}
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -32,6 +32,8 @@ use codex_app_server_client::RemoteAppServerClient;
+ use codex_app_server_client::RemoteAppServerConnectArgs;
+ pub use codex_app_server_client::RemoteAppServerEndpoint;
++use codex_app_server_client::StdioAppServerClient;
++use codex_app_server_client::StdioAppServerConnectArgs;
+@@ -445,6 +447,7 @@ pub fn remote_addr_supports_auth_token(endpoint: &RemoteAppServerEndpoint) -> bool {
+         }
+         RemoteAppServerEndpoint::UnixSocket { .. } => false,
++        RemoteAppServerEndpoint::StdioChild { .. } => false,
+     }
+ }
+@@ -454,17 +457,31 @@ async fn connect_remote_app_server(
+     endpoint: RemoteAppServerEndpoint,
+ ) -> color_eyre::Result<AppServerClient> {
+-    let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+-        endpoint,
+-        client_name: "codex-tui".to_string(),
+-        client_version: env!("CARGO_PKG_VERSION").to_string(),
+-        experimental_api: true,
+-        mcp_server_openai_form_elicitation: false,
+-        opt_out_notification_methods: Vec::new(),
+-        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+-    })
+-    .await
+-    .wrap_err("failed to connect to remote app server")?;
+-    Ok(AppServerClient::Remote(app_server))
++    let client_name = "codex-tui".to_string();
++    let client_version = env!("CARGO_PKG_VERSION").to_string();
++    match endpoint {
++        RemoteAppServerEndpoint::StdioChild { command } => {
++            let app_server = StdioAppServerClient::connect(StdioAppServerConnectArgs {
++                command,
++                client_name,
++                client_version,
++                experimental_api: true,
++                mcp_server_openai_form_elicitation: false,
++                opt_out_notification_methods: Vec::new(),
++                channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
++            }).await.wrap_err("failed to start local stdio app server")?;
++            Ok(AppServerClient::Stdio(app_server))
++        }
++        endpoint => {
++            let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
++                endpoint,
++                client_name,
++                client_version,
++                experimental_api: true,
++                mcp_server_openai_form_elicitation: false,
++                opt_out_notification_methods: Vec::new(),
++                channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
++            }).await.wrap_err("failed to connect to remote app server")?;
++            Ok(AppServerClient::Remote(app_server))
++        }
++    }
+ }
+@@ -2280,7 +2297,10 @@ fn app_server_target_for_launch(
+         }
+         return Ok(AppServerTarget::Embedded);
+     }
+     Ok(match explicit_remote_endpoint {
++        Some(endpoint @ RemoteAppServerEndpoint::StdioChild { .. }) => {
++            AppServerTarget::LocalDaemon { endpoint }
++        }
+         Some(endpoint) => AppServerTarget::Remote { endpoint },
+         None if can_reuse_implicit_local_daemon => {
+             default_daemon_socket.map_or(AppServerTarget::Embedded, |socket_path| {

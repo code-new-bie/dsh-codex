@@ -21,10 +21,12 @@ git -C $Dest clean -ffd | Out-Null
 
 $Patches = Get-ChildItem (Join-Path $Root 'upstream\patches\codex\*.patch') -ErrorAction SilentlyContinue | Sort-Object Name
 foreach ($Patch in $Patches) {
-    # Recount stale hand-maintained hunk line counts, but still require every
-    # context line to match the pinned Codex commit before applying the patch.
-    git -C $Dest apply --recount --check $Patch.FullName
-    git -C $Dest apply --recount $Patch.FullName
+    # Match the Unix materializer exactly: compact hand-maintained hunks may
+    # carry fewer context lines than traditional unified diffs, while every
+    # context line present must still match the pinned source. Validate the
+    # whole patch before mutating the checkout.
+    git -C $Dest apply --verbose --unidiff-zero --recount --check $Patch.FullName
+    git -C $Dest apply --verbose --unidiff-zero --recount $Patch.FullName
 }
 
 Write-Host "Materialized Codex $Pin at $Dest"

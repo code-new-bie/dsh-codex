@@ -1,4 +1,4 @@
-import { DshToolPresentationResolver } from './tool-presentation.mjs';
+import { DshToolPresentationResolver } from '../dsh/tool-presentation.mjs';
 
 const MODEL_PREFIX = 'dshx:';
 const DEFAULT_REASONING_SENTINEL = 'dsh-default';

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxReleaseAdapter } from '../src/dsh/release-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 function childController() {
   let cancelled = 0;
@@ -21,7 +21,7 @@ function childController() {
 
 function adapterWithChild() {
   const { controller, cancelled } = childController();
-  const adapter = Object.create(DshxReleaseAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.controllers = new Map([['child-1', controller]]);
   adapter.diagnostics = () => {};
   return { adapter, controller, cancelled };

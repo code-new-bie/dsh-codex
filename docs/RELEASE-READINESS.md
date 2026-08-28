@@ -1,64 +1,69 @@
 # 1.0 release readiness
 
-This file defines the evidence required before a DSHX release candidate may be promoted to 1.0. It intentionally distinguishes **implemented checks** from **checks that have actually passed on a release candidate**.
+This document defines the evidence required before a DSHX release candidate can be promoted. A check is green only when it passes for the **exact candidate SHA/artifact**; the existence of a test is not evidence by itself.
 
-## Rule
+## Required architecture
 
-No item becomes green because code for the check exists. A release candidate is green only when the corresponding repository gate or CI job has passed for the exact candidate commit/tag and the result is recorded. GitHub Actions is an automation surface, not the authority for release correctness: runner-independent repository scripts are preferred wherever a check does not intrinsically require a hosted platform.
+A candidate is invalid regardless of test results if any of these are false:
 
-The pinned DSH `0.1.0-rc.8` line requires Node `^22.19.0 || >=24.0.0`. DSHX 1.0 standardizes dependency freezing, CI and release artifact generation on **Node 24 LTS / npm 11** so all release evidence uses one supported toolchain.
+- the package is a standard DSH bundle (`dsh.bundle.patch`);
+- the user's installed `dsh --profile tui` process is the sole DSH runtime/Loader owner;
+- the presentation row starts only the pinned native TUI child;
+- TUI protocol I/O uses anonymous directional child-process pipes;
+- no production TCP/WebSocket/UDS listener, bridge executable or Node local server exists;
+- the TUI does not spawn a DSH/backend child;
+- DSH owns Agent, Session, models, tools, sandbox, approvals, skills, subagents and persistence;
+- Codex dialect code remains confined to the TUI protocol boundary;
+- production installation does not materialize a second DSH runtime or hard-block an untested host version.
 
 ## Automation tiers
 
-- **PR / main CI:** two Ubuntu jobs only. `Core / Node 24` runs first; `Linux TUI / pinned Codex / local IPC` runs only after Core passes.
-- **RC platform gate:** `release/**` PR heads targeting `main` (or manual dispatch) run real Windows ConPTY and macOS PTY/CJK/resize validation with explicit exact-head checkout verification.
-- **Release tag:** `v*` runs the full platform packaging, clean-install, provenance, checksum and publication matrix.
-- **Dependency freeze:** never writes a branch from CI. Run `npm run freeze:deps` in a trusted Node 24 LTS / npm 11 environment with npm-registry access, review the generated `package-lock.json`, then commit it. CI consumes it with `npm ci`.
+- **PR/main CI:** Node 24 core gate, then Linux native TUI/build/bundle/PTY gate.
+- **RC platform gate:** release-head PRs or explicit dispatch run Windows ConPTY and macOS PTY/CJK/resize against an exact SHA.
+- **Release tag:** `v*` builds platform tarballs, verifies standard bundle activation, clean-installs artifacts, runs native UI gates and publishes provenance/checksums.
+- **Dependency freeze:** generated outside CI with Node 24/npm 11, reviewed and committed; CI consumes it with `npm ci`.
 
 ## Automated gates
 
-| Gate | Evidence implemented in repository | Required result for 1.0 |
+| Gate | Evidence | Required |
 |---|---|---|
-| Zero-argument launch | `bin/dshx.mjs`, clean-install smoke | pass on supported release artifacts |
-| Supported Node runtime | package engine matches pinned DSH (`^22.19.0 || >=24.0.0`); release/freeze baseline Node 24 LTS | pass |
-| Official DSH composition | `scripts/runtime-smoke.mjs` | pass on exact candidate |
-| Frozen source dependency graph | checked-in `package-lock.json`; `npm run freeze:deps` resolves it with install scripts disabled under Node 24/npm 11 | lock present, reviewed and no manifest drift |
-| Exact DSH dependency closure | `scripts/verify-dsh-closure.mjs`, source lock and release shrinkwrap | pass |
-| DSH ownership boundary | adapter/unit tests + `scripts/verify-ownership-boundary.mjs` | pass |
-| Approval/permission fail-closed | approval/permission/subagent authority tests | pass |
-| Session resume/durability projection | DSH `agents.resume`, persistence projection and resume tests; persisted model/header wins over machine default | pass |
-| Local production transport | no production TCP listener; pinned TUI rejects TCP WebSocket endpoint | pass |
-| Cross-platform local IPC data plane | `dshx-ipc-bridge --check` performs real private UDS + WebSocket-framing ping/pong | pass on Linux/Windows/macOS |
-| Visible slash-command contract | `scripts/verify-slash-contract.mjs` classifies every pinned Codex command and asserts DSH-backed methods for every runtime-owned command left visible in DSHX | pass |
-| Real pinned TUI / Linux + macOS | PTY smoke drives pinned TUI through local IPC, resizes the terminal, and roundtrips a CJK prompt | pass on both Unix release platforms |
-| Real pinned TUI / Windows | ConPTY smoke drives pinned TUI through the same local-IPC topology, resizes the terminal, and roundtrips a Chinese prompt | pass |
-| Automated CJK/resize sanity | Linux/macOS PTY + Windows ConPTY verify UTF-8 input/echo survives a live resize without process/session loss | pass |
-| CI action supply chain | every external `uses:` ref is a current GitHub Action release pinned to a full immutable commit SHA; `test/ci-actions-pins.test.mjs` rejects mutable refs | pass |
-| Packaging | platform tarball + static local-import closure check + publishable shrinkwrap derived from the frozen source graph | pass |
-| Clean installation | install generated tarball then `dshx --version` + `dshx doctor` | pass on every release platform |
-| Release provenance | platform sidecar records Codex pin, DSH pin and SHA-256 of the frozen source `package-lock.json` | present and consistent across artifacts |
-| Release artifacts | Linux x64, Windows x64, macOS arm64, macOS x64 | all built |
-| Integrity | release `SHA256SUMS` covers tarballs and provenance sidecars | published |
-| Codex thin-fork invariants | patch application/build + `scripts/verify-tui-invariants.mjs` | pass |
+| Frozen dependency graph | checked-in `package-lock.json` | no manifest drift |
+| Tested DSH closure | `scripts/verify-dsh-closure.mjs` | pass |
+| Ownership boundary | unit tests + `scripts/verify-ownership-boundary.mjs` | pass |
+| Official profile lifecycle | `scripts/runtime-smoke.mjs` | Loader settle → directional initialize → child exit → `appExit` |
+| Standard bundle delivery | `scripts/verify-bundle-install.mjs` | pack/add/dump/activate/single-runtime pass |
+| Thin-fork materialization/build | build scripts + `scripts/verify-tui-invariants.mjs` | pass with pinned Codex and `cargo --locked` |
+| No backend child | thin-fork guard | TUI contains no DSH/backend `Command::new` path |
+| No socket/bridge production path | ownership/package guards | pass |
+| Visible slash-command contract | `scripts/verify-slash-contract.mjs` | pass |
+| Session/model/tool/approval delegation | unit/contract suite | pass/fail-closed |
+| Linux native TUI | PTY deterministic directional-pipe test | startup, CJK prompt, resize pass |
+| macOS native TUI | RC PTY test | startup, CJK prompt, resize pass |
+| Windows native TUI | RC ConPTY test | startup, Chinese prompt, resize pass |
+| Packaging | `scripts/package-platform.mjs` | TUI-only platform tarball, local-import closure, frozen shrinkwrap |
+| Clean install | release workflow | no second `@deepseek-ai/dsh`; installed launcher/version works |
+| Provenance | release sidecar | same source-lock SHA, Codex pin, DSH tested pin, transport contract |
+| Integrity | `SHA256SUMS` | covers tarballs and sidecars |
+| GitHub Actions pins | `test/ci-actions-pins.test.mjs` | immutable action SHAs |
 
-## Manual UX acceptance gate
+## Manual Windows Terminal / IME gate
 
-Automation can exercise PTY/ConPTY resize and Chinese text, but it cannot establish real **IME composition-state behavior**, mouse behavior, or visual parity. For the exact 1.0 release candidate, perform a side-by-side run against the pinned Codex TUI using the same Windows Terminal dimensions/theme and record pass/fail for:
+ConPTY can validate Unicode text and resize, but cannot prove real IME composition behavior or visual parity. For the exact Windows RC artifact, compare against the pinned Codex TUI in the same Windows Terminal dimensions/theme and record:
 
-- Windows Terminal startup, visual reflow after resize, scroll and mouse behavior;
-- Chinese IME composition/commit/cancel in the multiline composer;
-- wide CJK glyph alignment in transcript/tool/diff cells;
-- slash completion and help keyboard behavior;
+- startup/reflow/scroll/mouse behavior;
+- Chinese IME compose/commit/cancel in the multiline composer;
+- wide CJK alignment in transcript/tool/diff cells;
+- slash completion/help;
 - model and permission pickers;
 - approval and ask-user overlays;
-- shell/tool streaming and collapse behavior;
+- tool/shell streaming and collapse behavior;
 - unified diff review;
-- plan/reasoning cells when DSH exposes them;
-- steering and Ctrl+C interrupt during an active turn;
-- resume picker and restored session/model state;
+- plan/reasoning presentation when DSH exposes it;
+- steering and Ctrl+C during an active DSH turn;
+- resume and restored DSH session/model state;
 - status/footer rendering.
 
-Before starting the manual comparison, verify and install the **exact generated Windows artifact** with:
+Prepare the exact artifact with:
 
 ```powershell
 ./scripts/windows-rc-acceptance.ps1 `
@@ -66,23 +71,15 @@ Before starting the manual comparison, verify and install the **exact generated 
   -ExpectedSha256 <SHA256SUMS value>
 ```
 
-The harness verifies the artifact hash, performs an isolated global-prefix install, runs `dshx --version` and `dshx doctor`, and prints the exact installed `dshx.cmd` path to use for the Windows Terminal/IME session. Do not substitute a source checkout after this setup.
-
-Any difference is either fixed, documented as a deliberate product difference in `docs/UX-PARITY.md`, or blocks 1.0.
+The helper verifies the artifact checksum, performs an isolated install and prints the exact launcher path to use for the manual session. Do not substitute a source checkout after this point.
 
 ## Promotion procedure
 
-1. In a trusted Node 24 LTS / npm 11 environment with npm-registry access, run `npm run freeze:deps`; review and commit the generated `package-lock.json`, then freeze the candidate commit on `release/1.0-rc`. Codex/DSH pins must not change during validation.
-2. Require the exact candidate to pass the lean `CI` workflow (`Core / Node 24` then `Linux TUI`) and the `RC Platform Gate` (Windows ConPTY + macOS PTY). Equivalent runner-independent repository gates may be used for diagnosis, but platform acceptance must execute on the named platform.
-3. Create a prerelease tag (for example `v1.0.0-rc.N`) and require every release-matrix build/clean-install/TUI gate to pass. The RC tag must point at the current `release/1.0-rc` head.
-4. Confirm each release sidecar identifies the same frozen source-lock SHA-256 and expected Codex/DSH pins.
-5. Run `scripts/windows-rc-acceptance.ps1` against the generated Windows release artifact and its published SHA-256, then use the printed installed launcher for the manual Windows Terminal/CJK/IME side-by-side acceptance run.
-6. Resolve every failed gate without weakening a DSH ownership or security boundary.
-7. Re-run affected automated and manual gates after fixes.
-8. Merge PR #11 only after all RC gates are green; stable `v1.0.0` must point at the current `main` head and the release ledger issues #12–#15 must be closed.
-
-## Current integration note
-
-`release/1.0-rc` is the sole release-candidate integration branch. It is based on the production local-IPC implementation from `agent/production-ipc`; the alternative direct-stdio Codex-client experiment is intentionally excluded because it requires a much larger upstream TUI/client patch and would increase DSHX maintenance ownership.
-
-Older stacked draft PRs remain historical engineering workstreams only. They are not release evidence. The exact `release/1.0-rc` head and its eventual `v1.0.0-rc.N` tag are the only commits whose automated/manual evidence may be used to promote 1.0.
+1. Freeze/review the Node dependency graph and pin the Codex/DSH tested sources.
+2. Require the exact SHA to pass Core + Linux native CI.
+3. Run the exact same SHA through Windows and macOS RC platform gates.
+4. Build a prerelease tag and require every release-matrix build, bundle activation, clean-install and native UI gate to pass.
+5. Confirm all sidecars agree on source lock, Codex pin, DSH tested pin and transport identifier.
+6. Perform the Windows Terminal/IME side-by-side gate on the generated Windows artifact.
+7. Fix failures without weakening DSH ownership/security boundaries; repeat affected gates on a new exact SHA.
+8. Promote only when no automated or manual blocker remains.

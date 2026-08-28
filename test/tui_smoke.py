@@ -2,7 +2,6 @@
 import json
 import os
 import pathlib
-import subprocess
 import tempfile
 import time
 
@@ -10,26 +9,12 @@ import pexpect
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPT = "你好，DSHX PTY resize"
-# Ratatui redraws a line with cursor-addressing writes. On some terminals/runners,
-# the visible prompt can therefore arrive as multiple printable spans separated by
-# ANSI cursor moves rather than one contiguous raw PTY substring. Validate the
-# visible content in order without weakening the CJK/ASCII prompt contract.
 PROMPT_TOKENS = ("你", "好", "，", "DSHX", "PTY", "resize")
 EXPECTED_TUI_VERSION = os.environ.get("DSHX_VERSION", "1.0.0-ci")
 EXPECTED_MODEL_DISPLAY_NAME = "DSHX Protocol Stub"
 trace_fd, trace_name = tempfile.mkstemp(prefix="dshx-protocol-trace-", suffix=".jsonl")
 os.close(trace_fd)
 trace_path = pathlib.Path(trace_name)
-server_env = os.environ.copy()
-server_env["DSHX_STUB_TRACE_FILE"] = str(trace_path)
-server = subprocess.Popen(
-    ["node", "bin/dshx-stub-local.mjs"],
-    cwd=ROOT,
-    env=server_env,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-)
 
 
 def wait_for_protocol_notification(method, timeout=10):
@@ -55,7 +40,6 @@ def wait_for_protocol_notification(method, timeout=10):
 
 
 def expect_rendered_tokens(child, tokens):
-    """Consume printable tokens in visible order while tolerating ANSI redraws between them."""
     rendered = []
     for token in tokens:
         child.expect_exact(token)
@@ -64,11 +48,6 @@ def expect_rendered_tokens(child, tokens):
 
 
 try:
-    endpoint = server.stdout.readline().strip()
-    if not endpoint.startswith("unix://"):
-        stderr = server.stderr.read()
-        raise RuntimeError(f"local stub did not produce a unix endpoint: {endpoint!r}\n{stderr}")
-
     binary = ROOT / "dist" / "bin" / "dshx-tui"
     if not binary.exists():
         raise RuntimeError(f"built TUI missing: {binary}")
@@ -78,15 +57,13 @@ try:
         env.update({
             "TERM": "xterm-256color",
             "CODEX_HOME": codex_home,
-            "DSHX_APP_SERVER_ENDPOINT": endpoint,
-            # pexpect provides a PTY transport, not a terminal emulator that can
-            # negotiate kitty keyboard enhancement modes. Use Codex's supported
-            # fallback so this gate measures TUI/local-IPC/CJK/resize behavior
-            # consistently on Linux and macOS rather than terminal emulation.
+            "DSHX_TUI_BIN": str(binary),
+            "DSHX_STUB_TRACE_FILE": str(trace_path),
             "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "1",
         })
         child = pexpect.spawn(
-            str(binary),
+            env.get("NODE", "node"),
+            [str(ROOT / "devtools" / "tui-stub-parent.mjs")],
             cwd=str(ROOT),
             env=env,
             encoding="utf-8",
@@ -95,43 +72,24 @@ try:
         )
         transcript = []
         try:
-            # Ratatui can place ANSI style transitions between the product name
-            # and the version suffix. Assert them independently so the smoke
-            # validates visible content rather than terminal styling bytes.
             child.expect("DeepSeek Harness")
             transcript.append(child.before + child.after)
             child.expect(f"v{EXPECTED_TUI_VERSION}")
             transcript.append(child.before + child.after)
             wait_for_protocol_notification("thread/started")
-            # Startup is asynchronous: thread/started can arrive while the model
-            # banner still says "loading". Wait for the human-readable model label,
-            # not the provider-aware internal wire id.
             child.expect(EXPECTED_MODEL_DISPLAY_NAME)
             transcript.append(child.before + child.after)
             rendered_startup = "".join(transcript)
             if "v0.0.0" in rendered_startup:
-                raise AssertionError(
-                    "Codex crate version leaked into DSHX startup presentation:\n" + rendered_startup
-                )
+                raise AssertionError("Codex crate version leaked into DSHX startup presentation:\n" + rendered_startup)
             if "dshx:Wy" in rendered_startup:
-                raise AssertionError(
-                    "opaque DSHX model wire id leaked into TUI presentation:\n" + rendered_startup
-                )
+                raise AssertionError("opaque DSHX model wire id leaked into TUI presentation:\n" + rendered_startup)
+
             child.setwinsize(40, 100)
             child.send(PROMPT)
-            # A PTY write completing does not mean the TUI has consumed the
-            # bytes. On slower macOS runners, a fixed delay measured from write
-            # completion can expire while the prompt is still queued, making
-            # Enter arrive immediately after the paste-like burst is processed.
-            # Wait until every visible CJK/ASCII prompt token has been rendered
-            # in order. Cursor-addressing escape sequences may occur between
-            # tokens, so raw contiguous-string matching is intentionally wrong.
             transcript.append(expect_rendered_tokens(child, PROMPT_TOKENS))
             time.sleep(0.25)
             child.send("\r")
-            # "received:" is unique to the stub response, so it establishes that
-            # the submitted turn reached the TUI response path. Then verify the
-            # echoed prompt using the same rendered-token semantics as the input.
             child.expect_exact("received:")
             transcript.append(child.before + child.after)
             transcript.append(expect_rendered_tokens(child, PROMPT_TOKENS))
@@ -139,17 +97,11 @@ try:
             transcript.append(child.before or "")
             trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing trace>"
             raise AssertionError(
-                "Pinned DSHX TUI local-IPC/CJK/resize smoke failed.\n"
+                "Pinned DSHX TUI directional-stdio/CJK/resize smoke failed.\n"
                 f"Protocol trace:\n{trace}\n"
                 "Transcript:\n" + "".join(transcript)
             )
         finally:
             child.close(force=True)
 finally:
-    server.terminate()
-    try:
-        server.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        server.kill()
-        server.wait(timeout=5)
     trace_path.unlink(missing_ok=True)

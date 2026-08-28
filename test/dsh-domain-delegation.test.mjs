@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshxProductAdapter } from '../src/dsh/product-adapter.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
 
 function bareAdapter() {
-  const adapter = Object.create(DshxProductAdapter.prototype);
+  const adapter = Object.create(DshxPresentationAdapter.prototype);
   adapter.cwd = '/workspace';
   adapter.controllers = new Map();
   adapter.diagnostics = () => {};

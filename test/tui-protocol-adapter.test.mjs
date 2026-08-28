@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DshAppServerAdapter } from '../src/dsh/app-server-adapter.mjs';
-import { decodeDshModel } from '../src/dsh/codex-shapes.mjs';
+import { DshxPresentationAdapter } from '../src/tui-protocol/adapter.mjs';
+import { decodeDshModel } from '../src/tui-protocol/shapes.mjs';
 
 function fixture() {
   const sent = [];
@@ -17,7 +17,12 @@ function fixture() {
   };
 
   const services = {};
-  const rootCtx = { get(name) { return services[name]; } };
+  // The unified presentation adapter registers release-layer agent lifecycle
+  // listeners during ensureReady, so the fake context must accept `on`.
+  const rootCtx = {
+    get(name) { return services[name]; },
+    on() { return () => {}; }
+  };
 
   function requestHeader(session) {
     for (let index = session.events.length - 1; index >= 0; index -= 1) {
@@ -206,7 +211,7 @@ function fixture() {
     roots() { return [...live.values()]; }
   };
 
-  const adapter = new DshAppServerAdapter({
+  const adapter = new DshxPresentationAdapter({
     ctx: rootCtx,
     send: (message) => sent.push(message),
     cwd: '/workspace',
