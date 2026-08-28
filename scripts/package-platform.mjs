@@ -5,6 +5,7 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { assertLockRootMatchesManifest } from './lock-root-contract.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -27,12 +28,9 @@ if (!fs.existsSync(tuiSource)) {
   throw new Error(`Missing built TUI at ${tuiSource}; build the pinned Codex TUI first`);
 }
 
-// A reviewed lock can retain unreachable historical root records until the next
-// trusted freeze. Every dependency that the current manifest can install must
-// still have the exact frozen spec; extras are deliberately ignored here and
-// are removed from the staged publishable root below.
-assertDependencySubset('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);
-assertDependencySubset('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);
+// Packaging is itself a release boundary, so it must reject any source
+// manifest/lock drift even when callers bypass the normal CI preflight.
+assertLockRootMatchesManifest(rootPackage, sourceLock, 'package-lock.json');
 
 const releaseRoot = path.join(root, '.release');
 const stage = path.join(releaseRoot, `dshx-${platform}-${arch}`);
@@ -117,8 +115,8 @@ for (const file of walkJs(stage)) {
   }
 }
 
-// Derive the publishable shrinkwrap from the reviewed source lock. Historical
-// unreachable records may remain, but the staged root exposes production deps only.
+// Derive the publishable shrinkwrap from the exact reviewed source lock. The
+// staged root intentionally removes devDependencies and adds platform metadata.
 const shrinkwrap = structuredClone(sourceLock);
 shrinkwrap.name = packageJson.name;
 shrinkwrap.version = packageJson.version;
@@ -188,14 +186,6 @@ const metadata = {
 };
 fs.writeFileSync(`${targetTarball}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
 process.stdout.write(`${targetTarball}\n`);
-
-function assertDependencySubset(label, actual = {}, expected = {}) {
-  for (const [name, spec] of Object.entries(expected)) {
-    if (actual[name] !== spec) {
-      throw new Error(`Frozen package-lock.json ${label}.${name} does not match package.json: expected ${spec}, got ${actual[name] ?? '<missing>'}`);
-    }
-  }
-}
 
 function* walkJs(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
