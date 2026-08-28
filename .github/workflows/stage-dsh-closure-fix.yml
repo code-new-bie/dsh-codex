@@ -1,0 +1,82 @@
+name: Stage DSH Closure Fix
+
+on:
+  push:
+    branches: ['automation/stage-dsh-closure-fix']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Syntax and source closure
+        run: |
+          node --check scripts/verify-dsh-closure.mjs
+          node --check scripts/package-platform.mjs
+          node scripts/verify-dsh-closure.mjs . package-lock.json
+      - name: Validate explicit stage baseline and fail-closed mismatch
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+
+          const root = process.cwd();
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const expected = pkg.devDependencies['@deepseek-ai/dsh'];
+          if (expected !== '0.1.0-rc.8') throw new Error(`unexpected test baseline ${expected}`);
+
+          const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-stage-closure-'));
+          try {
+            const stagedPkg = structuredClone(pkg);
+            delete stagedPkg.devDependencies;
+            fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify(stagedPkg, null, 2));
+
+            const shrink = structuredClone(lock);
+            delete shrink.packages[''].devDependencies;
+            fs.writeFileSync(path.join(stage, 'npm-shrinkwrap.json'), JSON.stringify(shrink, null, 2));
+
+            const verifier = path.join(root, 'scripts', 'verify-dsh-closure.mjs');
+            const run = (...extra) => spawnSync(
+              process.execPath,
+              [verifier, stage, path.join(stage, 'npm-shrinkwrap.json'), ...extra],
+              { encoding: 'utf8' }
+            );
+
+            const withoutExpected = run();
+            if (withoutExpected.status === 0 || !withoutExpected.stderr.includes('requires one exact tested DSH release baseline')) {
+              throw new Error(`stage unexpectedly self-derived baseline: ${withoutExpected.stdout}${withoutExpected.stderr}`);
+            }
+
+            const good = run('--expected', expected);
+            if (good.status !== 0) throw new Error(`explicit stage baseline failed: ${good.stdout}${good.stderr}`);
+
+            const dshEntry = Object.entries(shrink.packages).find(([location, record]) =>
+              /(?:^|\/)node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/.test(location) && record?.version === expected
+            );
+            if (!dshEntry) throw new Error('fixture contains no DSH package');
+            shrink.packages[dshEntry[0]].version = '0.1.0-rc.7';
+            fs.writeFileSync(path.join(stage, 'npm-shrinkwrap.json'), JSON.stringify(shrink, null, 2));
+            const bad = run('--expected', expected);
+            if (bad.status === 0 || !bad.stderr.includes('refuses a mixed DeepSeek Harness release closure')) {
+              throw new Error(`mismatch did not fail closed: ${bad.stdout}${bad.stderr}`);
+            }
+
+            const source = fs.readFileSync('scripts/package-platform.mjs', 'utf8');
+            if (!source.includes("'--expected',\n  testedDshVersion")) {
+              throw new Error('packager does not bind stage verifier to testedDshVersion');
+            }
+            console.log('stage DSH closure contract validated');
+          } finally {
+            fs.rmSync(stage, { recursive: true, force: true });
+          }
+          NODE
