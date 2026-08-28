@@ -124,6 +124,7 @@ test('Windows npm dsh.cmd shim resolves back to the same installation JS bin wit
     fs.writeFileSync(cli, '');
     const resolved = resolveDshInvocation(home, { PATH: prefix }, 'win32');
     assert.equal(resolved.command, process.execPath);
-    assert.deepEqual(resolved.args, [cli]);
+    assert.equal(resolved.args.length, 1);
+    assert.equal(fs.realpathSync(resolved.args[0]), fs.realpathSync(cli));
   });
 });
