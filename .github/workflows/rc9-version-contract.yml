@@ -1,0 +1,66 @@
+name: RC9 Version Contract
+
+on:
+  push:
+    branches: ['automation/rc9-version-contract']
+
+permissions:
+  contents: read
+
+jobs:
+  package-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 1f66125248bb8ab1c23c9c440f2eb99ae45cf4ae
+      - name: Verify exact source checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = 1f66125248bb8ab1c23c9c440f2eb99ae45cf4ae
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install frozen graph
+        run: npm ci
+      - name: Prepare inert packaging payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/bin .upstream/codex
+          printf '#!/bin/sh\nexit 0\n' > dist/bin/dshx-tui
+          chmod +x dist/bin/dshx-tui
+          printf 'validation-only license placeholder\n' > .upstream/codex/LICENSE
+      - name: Build tag-version package
+        env:
+          DSHX_VERSION: 1.0.0-rc.9
+        run: node scripts/package-platform.mjs
+      - name: Verify version identity across artifact surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          TGZ='dist/release/dshx-1.0.0-rc.9-linux-x64.tgz'
+          SIDE="$TGZ.json"
+          test -f "$TGZ"
+          test -f "$SIDE"
+          mkdir unpacked
+          tar -xzf "$TGZ" -C unpacked
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('unpacked/package/package.json', 'utf8'));
+          const shrink = JSON.parse(fs.readFileSync('unpacked/package/npm-shrinkwrap.json', 'utf8'));
+          const side = JSON.parse(fs.readFileSync('dist/release/dshx-1.0.0-rc.9-linux-x64.tgz.json', 'utf8'));
+          for (const [label, value] of [
+            ['package.json', pkg.version],
+            ['shrinkwrap root', shrink.packages?.['']?.version],
+            ['shrinkwrap top-level', shrink.version],
+            ['provenance', side.version]
+          ]) {
+            if (value !== '1.0.0-rc.9') throw new Error(`${label} version mismatch: ${value}`);
+          }
+          if (side.transport !== 'profile-directional-pipes') throw new Error(`transport mismatch: ${side.transport}`);
+          if (side.dependencyGraph !== 'source-package-lock') throw new Error(`dependency graph mismatch: ${side.dependencyGraph}`);
+          if (side.dshVersion !== '0.1.0-rc.8') throw new Error(`tested DSH mismatch: ${side.dshVersion}`);
+          if (side.dshHostRange !== '>=0.1.0-rc.8') throw new Error(`host range mismatch: ${side.dshHostRange}`);
+          console.log('rc.9 tag-version packaging contract passed');
+          NODE
