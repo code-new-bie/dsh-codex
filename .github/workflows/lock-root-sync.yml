@@ -1,0 +1,77 @@
+name: Lock Root Sync
+
+on:
+  push:
+    branches: ['automation/lock-root-sync']
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: ${{ !contains(github.event.head_commit.message, '[lock-synced]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: automation/lock-root-sync
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Verify npm baseline and snapshot non-root lock records
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(npm --version)" == 11.* ]] || { echo 'lock sync requires npm 11' >&2; exit 1; }
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const packages = structuredClone(lock.packages ?? {});
+          delete packages[''];
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/nonroot-lock.json', JSON.stringify(packages));
+          NODE
+      - name: Regenerate lock metadata only
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Prove only root metadata changed and matches package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const before = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/nonroot-lock.json', 'utf8'));
+          const after = structuredClone(lock.packages ?? {});
+          const root = after[''];
+          assert.ok(root, 'lock root record missing');
+          delete after[''];
+          assert.deepStrictEqual(after, before, 'npm changed non-root package records');
+          assert.equal(lock.name, pkg.name);
+          assert.equal(lock.version, pkg.version);
+          assert.equal(root.name, pkg.name);
+          assert.equal(root.version, pkg.version);
+          for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'peerDependenciesMeta', 'engines', 'bin']) {
+            assert.deepStrictEqual(root[field] ?? {}, pkg[field] ?? {}, `lock root ${field} drift`);
+          }
+          assert.equal(root.dependencies?.['@deepseek-ai/dsh-cmdline'], undefined);
+          assert.equal(root.devDependencies?.ws, undefined);
+          NODE
+          node scripts/verify-dsh-closure.mjs
+          git diff --check
+          test -z "$(git status --porcelain -- package.json)"
+          git diff -- package-lock.json
+      - name: Commit synchronized lock root
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package-lock.json; then
+            echo 'package-lock root already synchronized'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package-lock.json
+          git commit -m 'chore(deps): sync frozen lock root metadata [lock-synced]'
+          git push origin HEAD:automation/lock-root-sync
