@@ -21,10 +21,24 @@ function fail(message) {
 
 function run(command, args, { cwd = ROOT, env = process.env, check = true } = {}) {
   const result = spawnSync(command, args, { cwd, env, encoding: 'utf8' });
+  if (result.error) throw result.error;
   if (check && result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);
   }
   return result;
+}
+
+function npmInvocation(args) {
+  if (process.platform !== 'win32') return ['npm', args];
+  const candidates = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  ].filter(Boolean);
+  const npmCli = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!npmCli) {
+    throw new Error(`Unable to locate npm CLI for shell-free Windows execution; checked: ${candidates.join(', ')}`);
+  }
+  return [process.execPath, [npmCli, ...args]];
 }
 
 async function probeProfileSurface({ dsh, cwd, env, profile = PROFILE, timeoutMs = 90_000 }) {
@@ -146,7 +160,14 @@ async function verifyInstall(specifier, label) {
 try {
   const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshx-source-pack-'));
   try {
-    const packed = run('npm', ['pack', '--pack-destination', packDir, '--loglevel', 'error']);
+    const [npmCommand, npmArgs] = npmInvocation([
+      'pack',
+      '--pack-destination',
+      packDir,
+      '--loglevel',
+      'error'
+    ]);
+    const packed = run(npmCommand, npmArgs);
     const name = packed.stdout.trim().split('\n').pop()?.trim();
     if (!name?.endsWith('.tgz')) throw new Error(`npm pack returned no tarball: ${packed.stdout}`);
     await verifyInstall(path.join(packDir, name), 'source bundle');
