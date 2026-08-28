@@ -1,0 +1,9 @@
+diff --git a/codex-rs/app-server-client/src/stdio.rs b/codex-rs/app-server-client/src/stdio.rs
+--- a/codex-rs/app-server-client/src/stdio.rs
++++ b/codex-rs/app-server-client/src/stdio.rs
+@@ -1,1 +1,1 @@
+-            && let Ok(Ok(result)) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
++            && let Ok(Ok(result)) = timeout(crate::SHUTDOWN_TIMEOUT, response_rx).await
+@@ -1,1 +1,1 @@
+-        if timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await.is_err() {
++        if timeout(crate::SHUTDOWN_TIMEOUT, &mut worker_handle).await.is_err() {
