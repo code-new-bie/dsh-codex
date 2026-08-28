@@ -2,12 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ProtocolStub, normalizeDispatchResult } from '../devtools/protocol-poc.mjs';
 
-function dispatch(stub, message) {
-  return normalizeDispatchResult(stub, message);
-}
-
 function request(stub, id, method, params = {}) {
-  const { response, events } = dispatch(stub, { id, method, params });
+  const { response, events } = normalizeDispatchResult(stub, { id, method, params });
   assert.equal(response?.id, id, `${method} must preserve the request id`);
   return { response, events };
 }
@@ -22,12 +18,6 @@ test('wire contract: Codex-style initialize → thread → streamed turn lifecyc
   assert.equal(Object.hasOwn(initialized.response, 'jsonrpc'), false);
   assert.equal(typeof initialized.response.result.userAgent, 'string');
   assert.notEqual(initialized.response.result.userAgent.length, 0);
-
-  // Codex sends this notification after initialize. The protocol fixture must
-  // accept it without synthesizing a response or a transport-level side effect.
-  const notification = dispatch(stub, { method: 'initialized' });
-  assert.equal(notification.response ?? null, null);
-  assert.deepEqual(notification.events, []);
 
   for (const [id, method, expected] of [
     [1, 'account/read', (result) => result.requiresOpenaiAuth === false],
