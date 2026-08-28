@@ -1,0 +1,77 @@
+name: Final Packaging Preflight
+
+on:
+  push:
+    branches: ['automation/final-packaging-preflight']
+
+permissions:
+  contents: read
+
+jobs:
+  linux-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dc206c1795b7c3fecf5090307dba47300f1a1979
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = dc206c1795b7c3fecf5090307dba47300f1a1979
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install exact frozen graph
+        run: npm ci
+      - name: Verify source lock and DSH closure
+        run: |
+          node scripts/verify-lock-root.mjs
+          node scripts/verify-dsh-closure.mjs . package-lock.json
+      - name: Enable official profile machinery
+        run: corepack enable pnpm
+      - name: Build pinned Codex TUI
+        shell: bash
+        run: bash scripts/build-codex-tui.sh
+      - name: Verify native thin-fork and slash contract
+        run: node scripts/verify-tui-invariants.mjs
+      - name: Build strict platform package
+        run: node scripts/package-platform.mjs
+      - name: Verify packaged bundle through official DSH profile
+        env:
+          DSHX_REQUIRE_RELEASE: '1'
+        run: node scripts/verify-bundle-install.mjs
+      - name: Clean-install package without shadow DSH runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          TGZ="$(find dist/release -maxdepth 1 -name 'dshx-*.tgz' -print -quit)"
+          test -n "$TGZ"
+          PREFIX="$RUNNER_TEMP/dshx-final-package-smoke"
+          npm install --global --prefix "$PREFIX" --include=optional --ignore-scripts=false "$TGZ"
+          if npm ls --global --prefix "$PREFIX" @deepseek-ai/dsh --depth=0 >/dev/null 2>&1; then
+            echo 'clean DSHX install unexpectedly materialized a second @deepseek-ai/dsh runtime' >&2
+            exit 1
+          fi
+          export DSHX_DSH_BIN="$PWD/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          "$PREFIX/bin/dshx" --version | grep -F '0.0.0-m1'
+      - name: Verify provenance binds exact source lock and transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          const files = fs.readdirSync('dist/release').filter((f) => f.endsWith('.tgz.json'));
+          if (files.length !== 1) throw new Error(`expected one provenance sidecar, got ${files}`);
+          const record = JSON.parse(fs.readFileSync(path.join('dist/release', files[0]), 'utf8'));
+          const lockHash = crypto.createHash('sha256').update(fs.readFileSync('package-lock.json')).digest('hex');
+          if (record.transport !== 'profile-directional-pipes') throw new Error(`bad transport: ${record.transport}`);
+          if (record.dependencyGraph !== 'source-package-lock') throw new Error(`bad dependency graph: ${record.dependencyGraph}`);
+          if (record.sourceLockSha256 !== lockHash) throw new Error('source lock provenance mismatch');
+          if (record.dshVersion !== '0.1.0-rc.8') throw new Error(`bad tested DSH: ${record.dshVersion}`);
+          if (record.dshHostRange !== '>=0.1.0-rc.8') throw new Error(`bad host range: ${record.dshHostRange}`);
+          console.log(`packaging provenance verified: ${files[0]}`);
+          NODE
