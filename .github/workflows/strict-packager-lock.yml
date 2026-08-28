@@ -1,0 +1,69 @@
+name: Strict Packager Lock
+
+on:
+  push:
+    branches: ['automation/strict-packager-lock']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[packager-strict]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: automation/strict-packager-lock
+      - name: Make source lock validation fail closed in the packager
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'scripts/package-platform.mjs';
+          let source = fs.readFileSync(file, 'utf8');
+          function replaceOnce(from, to, label) {
+            const count = source.split(from).length - 1;
+            if (count !== 1) throw new Error(`${label}: expected exactly one old fragment, found ${count}`);
+            source = source.replace(from, to);
+          }
+          replaceOnce(
+            "import { fileURLToPath } from 'node:url';\n",
+            "import { fileURLToPath } from 'node:url';\nimport { assertLockRootMatchesManifest } from './lock-root-contract.mjs';\n",
+            'lock contract import'
+          );
+          replaceOnce(
+            "// A reviewed lock can retain unreachable historical root records until the next\n// trusted freeze. Every dependency that the current manifest can install must\n// still have the exact frozen spec; extras are deliberately ignored here and\n// are removed from the staged publishable root below.\nassertDependencySubset('dependencies', sourceLockRoot.dependencies, rootPackage.dependencies);\nassertDependencySubset('devDependencies', sourceLockRoot.devDependencies, rootPackage.devDependencies);\n",
+            "// Packaging is itself a release boundary, so it must reject any source\n// manifest/lock drift even when callers bypass the normal CI preflight.\nassertLockRootMatchesManifest(rootPackage, sourceLock, 'package-lock.json');\n",
+            'source lock validation'
+          );
+          replaceOnce(
+            "// Derive the publishable shrinkwrap from the reviewed source lock. Historical\n// unreachable records may remain, but the staged root exposes production deps only.\n",
+            "// Derive the publishable shrinkwrap from the exact reviewed source lock. The\n// staged root intentionally removes devDependencies and adds platform metadata.\n",
+            'shrinkwrap comment'
+          );
+          replaceOnce(
+            "function assertDependencySubset(label, actual = {}, expected = {}) {\n  for (const [name, spec] of Object.entries(expected)) {\n    if (actual[name] !== spec) {\n      throw new Error(`Frozen package-lock.json ${label}.${name} does not match package.json: expected ${spec}, got ${actual[name] ?? '<missing>'}`);\n    }\n  }\n}\n\n",
+            "",
+            'obsolete subset validator'
+          );
+          fs.writeFileSync(file, source);
+          NODE
+          node --check scripts/package-platform.mjs
+          node scripts/verify-lock-root.mjs
+          node scripts/verify-dsh-closure.mjs . package-lock.json
+          git diff --check
+          changed="$(git status --porcelain | awk '{print $2}')"
+          [[ "$changed" == "scripts/package-platform.mjs" ]] || { echo "unexpected changed files: $changed" >&2; exit 1; }
+          git diff -- scripts/package-platform.mjs
+      - name: Commit strict packager lock validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/package-platform.mjs
+          git commit -m 'build(release): fail closed on manifest lock drift [packager-strict]'
+          git push origin HEAD:automation/strict-packager-lock
