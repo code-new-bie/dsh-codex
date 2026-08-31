@@ -1,0 +1,35 @@
+name: Promote RC9 Tag
+
+on:
+  push:
+    branches: ['automation/promote-rc9-tag']
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 3729f2a6e5dc6422a21875e86c64ebac3fb95297
+      - name: Verify lineage and create RC tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: 3729f2a6e5dc6422a21875e86c64ebac3fb95297
+          TAG: v1.0.0-rc.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          expected="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/release/1.0-rc" --jq .object.sha)"
+          test "$expected" = "$CANDIDATE"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; refusing to move or replace an RC tag" >&2
+            exit 1
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag "$TAG" "$CANDIDATE"
+          git push origin "refs/tags/$TAG"
